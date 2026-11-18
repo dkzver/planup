@@ -780,11 +780,11 @@ export class Engine {
       '#ddd8d0',
     )
 
-    this.addLabel('Кухня-гостиная', 3.8, 3.4)
-    this.addLabel('Спальня №2', 10.0, 2.6)
-    this.addLabel('Ванная', 10.8, 6.9)
-    this.addLabel('Санузел', 5.0, 5.75)
-    this.addLabel('Балкон', 3.85, -0.8)
+    this.addLabel('Кухня-гостиная · 52.1 м²', 3.8, 3.4)
+    this.addLabel('Спальня №2 · 20.7 м²', 10.0, 2.6)
+    this.addLabel('Ванная · 6.8 м²', 10.8, 6.9)
+    this.addLabel('Санузел · 2.1 м²', 5.0, 5.75)
+    this.addLabel('Балкон · 9.7 м²', 3.85, -0.8)
     this.addLabel('Прихожая', 6.8, 5.75)
     this.addLabel('Вход ↓', 6.8, 7.2)
 

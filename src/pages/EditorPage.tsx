@@ -343,7 +343,7 @@ export default function EditorPage() {
             />
           </label>
           <button className="btn btn-primary sm" onClick={buildApartment}>
-            Собрать квартиру
+            Планировка по чертежу
           </button>
           <button className="btn btn-primary sm" onClick={openFurn}>
             Расставить мебель
