@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Engine, type ToolId, type SelInfo, type OpeningData } from '../editor/Engine'
+import { Engine, type ToolId, type SelInfo, type OpeningData, type WorkVolumes } from '../editor/Engine'
 import { FURNITURE } from '../editor/furniture'
 
 const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
@@ -34,6 +34,7 @@ export default function EditorPage() {
   const [axes, setAxes] = useState(true)
   const [furnCat, setFurnCat] = useState('Спальня')
   const [showHelp, setShowHelp] = useState(false)
+  const [vol, setVol] = useState<WorkVolumes | null>(null)
   const [toast, setToast] = useState('')
   const [initError, setInitError] = useState('')
 
@@ -267,6 +268,15 @@ export default function EditorPage() {
           </label>
           <button className="btn btn-primary sm" onClick={buildApartment}>
             Собрать квартиру
+          </button>
+          <button
+            className="btn btn-ghost sm"
+            onClick={() => {
+              const v = engineRef.current?.getWorkVolumes()
+              if (v) setVol(v)
+            }}
+          >
+            Объёмы работ
           </button>
           <button className="btn btn-ghost sm" onClick={doSave}>
             Сохранить
@@ -603,6 +613,93 @@ export default function EditorPage() {
         </div>
         <div className="hint">{hint}</div>
       </footer>
+
+      {vol && (
+        <div className="modal" onClick={() => setVol(null)}>
+          <div className="modal-card vol" onClick={(e) => e.stopPropagation()}>
+            <h3>Объёмы основных работ</h3>
+            <div className="vol-totals">
+              <div>
+                <span>Помещений</span>
+                <b>{vol.totals.rooms}</b>
+              </div>
+              <div>
+                <span>Пол, м²</span>
+                <b>{vol.totals.floor.toFixed(2)}</b>
+              </div>
+              <div>
+                <span>Потолок, м²</span>
+                <b>{vol.totals.ceiling.toFixed(2)}</b>
+              </div>
+              <div>
+                <span>Стены брутто, м²</span>
+                <b>{vol.totals.wallsBrutto.toFixed(2)}</b>
+              </div>
+              <div>
+                <span>Стены нетто, м²</span>
+                <b>{vol.totals.wallsNetto.toFixed(2)}</b>
+              </div>
+              <div>
+                <span>Проёмы, м²</span>
+                <b>{vol.totals.openingsArea.toFixed(2)}</b>
+              </div>
+              <div>
+                <span>Двери</span>
+                <b>{vol.totals.doors}</b>
+              </div>
+              <div>
+                <span>Окна</span>
+                <b>{vol.totals.windows}</b>
+              </div>
+              <div>
+                <span>Плинтус, м</span>
+                <b>{vol.totals.plinth.toFixed(2)}</b>
+              </div>
+              <div>
+                <span>Длина стен, м</span>
+                <b>{vol.totals.wallLength.toFixed(2)}</b>
+              </div>
+            </div>
+
+            <h4>По помещениям</h4>
+            <table className="vol-table">
+              <thead>
+                <tr>
+                  <th>Помещение</th>
+                  <th>Пол, м²</th>
+                  <th>Потолок, м²</th>
+                  <th>Периметр, м</th>
+                  <th>Плинтус, м</th>
+                  <th>Двери</th>
+                  <th>Окна</th>
+                  <th>Покрытие</th>
+                </tr>
+              </thead>
+              <tbody>
+                {vol.rooms.map((r) => (
+                  <tr key={r.name}>
+                    <td>{r.name}</td>
+                    <td>{r.floor.toFixed(2)}</td>
+                    <td>{r.ceiling.toFixed(2)}</td>
+                    <td>{r.perimeter.toFixed(2)}</td>
+                    <td>{r.plinth.toFixed(2)}</td>
+                    <td>{r.doors}</td>
+                    <td>{r.windows}</td>
+                    <td>{r.wet ? 'плитка' : 'ламинат'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="note">
+              Стены нетто — за вычетом проёмов. Плинтус — периметр минус ширина дверей.
+              Покрытие: плитка в ванной/санузле/балконе, ламинат в сухих комнатах.
+            </p>
+            <button className="btn btn-primary" onClick={() => setVol(null)}>
+              Закрыть
+            </button>
+          </div>
+        </div>
+      )}
 
       {showHelp && (
         <div className="modal" onClick={() => setShowHelp(false)}>

@@ -39,6 +39,33 @@ export interface SelInfo {
   furnD?: number
 }
 
+export interface RoomVol {
+  name: string
+  floor: number
+  ceiling: number
+  perimeter: number
+  doors: number
+  windows: number
+  plinth: number
+  wet: boolean
+}
+
+export interface WorkVolumes {
+  rooms: RoomVol[]
+  totals: {
+    floor: number
+    ceiling: number
+    wallsBrutto: number
+    wallsNetto: number
+    openingsArea: number
+    doors: number
+    windows: number
+    plinth: number
+    wallLength: number
+    rooms: number
+  }
+}
+
 export interface EditorCallbacks {
   onToolChange?: (tool: ToolId) => void
   onVcb?: (text: string) => void
@@ -515,6 +542,7 @@ export class Engine {
 
   private underlay: THREE.Mesh | null = null
   private labels: THREE.Sprite[] = []
+  private labelMeta: { text: string; x: number; z: number }[] = []
 
   newProject() {
     this.clearDoc()
@@ -529,6 +557,7 @@ export class Engine {
       mat.dispose()
     }
     this.labels = []
+    this.labelMeta = []
     this.cb.onHint?.('Новый проект. Нарисуйте стены или соберите сцену из плана.')
   }
 
@@ -569,6 +598,7 @@ export class Engine {
     spr.renderOrder = 10
     this.scene.add(spr)
     this.labels.push(spr)
+    if (!text.startsWith('Вход')) this.labelMeta.push({ text, x, z })
   }
 
   private addWallAx(
@@ -619,6 +649,7 @@ export class Engine {
       this.scene.remove(s)
     }
     this.labels = []
+    this.labelMeta = []
 
     const EXT = 0.2
     const INT = 0.1
@@ -784,6 +815,129 @@ export class Engine {
     this.historyPush()
     this.frameAll()
     this.cb.onHint?.('Сцена собрана по обмерному плану. Проёмы можно тянуть.')
+  }
+
+  /** Объёмы основных работ по текущей модели */
+  getWorkVolumes(): WorkVolumes {
+    const r1 = (v: number) => Math.round(v * 100) / 100
+    const floors = this.objects.filter(
+      (o): o is SolidData => o.kind === 'solid' && o.height <= 0.15,
+    )
+    const walls = this.objects.filter((o): o is WallData => o.kind === 'wall')
+
+    const pointInPoly = (x: number, z: number, pts: { x: number; z: number }[]) => {
+      let inside = false
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        const xi = pts[i].x
+        const zi = pts[i].z
+        const xj = pts[j].x
+        const zj = pts[j].z
+        if (zi > z !== zj > z && x < ((xj - xi) * (z - zi)) / (zj - zi) + xi) inside = !inside
+      }
+      return inside
+    }
+    const distToSeg = (px: number, pz: number, ax: number, az: number, bx: number, bz: number) => {
+      const dx = bx - ax
+      const dz = bz - az
+      const l2 = dx * dx + dz * dz
+      if (l2 < 1e-9) return Math.hypot(px - ax, pz - az)
+      let t = ((px - ax) * dx + (pz - az) * dz) / l2
+      t = Math.max(0, Math.min(1, t))
+      return Math.hypot(px - (ax + t * dx), pz - (az + t * dz))
+    }
+    const distToPoly = (x: number, z: number, pts: { x: number; z: number }[]) => {
+      let best = Infinity
+      for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+        best = Math.min(best, distToSeg(x, z, pts[j].x, pts[j].z, pts[i].x, pts[i].z))
+      }
+      return best
+    }
+
+    const rooms: RoomVol[] = []
+    floors.forEach((f, idx) => {
+      const area = Math.abs(this.polygonArea(f.points))
+      let per = 0
+      for (let i = 0, j = f.points.length - 1; i < f.points.length; j = i++) {
+        per += Math.hypot(f.points[i].x - f.points[j].x, f.points[i].z - f.points[j].z)
+      }
+      const cx = f.points.reduce((s, p) => s + p.x, 0) / f.points.length
+      const cz = f.points.reduce((s, p) => s + p.z, 0) / f.points.length
+      let name = `Помещение ${idx + 1}`
+      let bestD = 4.5
+      for (const L of this.labelMeta) {
+        const d = Math.hypot(L.x - cx, L.z - cz)
+        if (d < bestD) {
+          bestD = d
+          name = L.text
+        }
+      }
+      const wet = /ванная|санузел|балкон/i.test(name)
+      let doors = 0
+      let windows = 0
+      let doorW = 0
+      for (const w of walls) {
+        const L = Math.max(0.01, w.a.distanceTo(w.b))
+        const dx = (w.b.x - w.a.x) / L
+        const dz = (w.b.z - w.a.z) / L
+        for (const op of w.openings) {
+          const px = w.a.x + dx * op.offset
+          const pz = w.a.z + dz * op.offset
+          const near = pointInPoly(px, pz, f.points) || distToPoly(px, pz, f.points) < 0.45
+          if (!near) continue
+          if (op.type === 'door') {
+            doors++
+            doorW += op.width
+          } else {
+            windows++
+          }
+        }
+      }
+      rooms.push({
+        name,
+        floor: r1(area),
+        ceiling: r1(area),
+        perimeter: r1(per),
+        doors,
+        windows,
+        plinth: r1(Math.max(0, per - doorW)),
+        wet,
+      })
+    })
+
+    let wallsBrutto = 0
+    let openingsArea = 0
+    let doors = 0
+    let windows = 0
+    let wallLength = 0
+    for (const w of walls) {
+      const L = w.a.distanceTo(w.b)
+      wallLength += L
+      wallsBrutto += L * w.height
+      for (const op of w.openings) {
+        openingsArea += op.width * op.height
+        if (op.type === 'door') doors++
+        else windows++
+      }
+    }
+    const floorT = r1(rooms.reduce((s, r) => s + r.floor, 0))
+    const ceilT = r1(rooms.reduce((s, r) => s + r.ceiling, 0))
+    const plinthT = r1(rooms.reduce((s, r) => s + r.plinth, 0))
+
+    return {
+      rooms,
+      totals: {
+        floor: floorT,
+        ceiling: ceilT,
+        wallsBrutto: r1(wallsBrutto),
+        wallsNetto: r1(Math.max(0, wallsBrutto - openingsArea)),
+        openingsArea: r1(openingsArea),
+        doors,
+        windows,
+        plinth: plinthT,
+        wallLength: r1(wallLength),
+        rooms: rooms.length,
+      },
+    }
   }
 
   serialize(): string {
