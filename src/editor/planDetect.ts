@@ -174,16 +174,15 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
   const darkRatio = darkCnt / n
 
   // слишком пусто или слишком «фото»
-  if (darkRatio < 0.015) {
+  if (darkRatio < 0.012) {
     return { ok: false, error: 'В документе почти нет тёмных линий — план квартиры не найден' }
   }
   if (darkRatio > 0.72) {
     return { ok: false, error: 'Документ слишком тёмный/залит — это не похожe на чертёж плана' }
   }
 
-  const minThick = Math.max(3, Math.round(Math.min(w, h) * 0.008))
-  const maxThick = Math.max(18, Math.round(Math.min(w, h) * 0.09))
-  const lineFrac = 0.28
+  const minThick = Math.max(3, Math.round(Math.min(w, h) * 0.006))
+  const maxThick = Math.max(20, Math.round(Math.min(w, h) * 0.11))
 
   const rowCount = new Int32Array(h)
   const colCount = new Int32Array(w)
@@ -198,8 +197,21 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
     colCount[x] = c
   }
 
-  const hBands = findBands(rowCount, Math.round(w * lineFrac), minThick, maxThick)
-  const vBands = findBands(colCount, Math.round(h * lineFrac), minThick, maxThick)
+  const tryFrac = (frac: number) => {
+    const hBands = findBands(rowCount, Math.round(w * frac), minThick, maxThick)
+    const vBands = findBands(colCount, Math.round(h * frac), minThick, maxThick)
+    return { hBands, vBands }
+  }
+
+  // два прохода: сначала строгий, потом мягче
+  let { hBands, vBands } = tryFrac(0.22)
+  if (hBands.length < 2 || vBands.length < 2) {
+    const second = tryFrac(0.13)
+    if (second.hBands.length + second.vBands.length > hBands.length + vBands.length) {
+      hBands = second.hBands
+      vBands = second.vBands
+    }
+  }
 
   if (hBands.length < 2 || vBands.length < 2) {
     return {
@@ -211,10 +223,10 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
   // сегменты стен в пикселях
   const hSegs: { from: number; to: number; thick: number; center: number }[] = []
   for (const b of hBands) {
-    const ext = darkExtent(dark, w, h, true, b.start, b.end, 0.5)
+    const ext = darkExtent(dark, w, h, true, b.start, b.end, 0.35)
     if (!ext) continue
     const len = ext.to - ext.from
-    if (len < w * 0.18) continue
+    if (len < w * 0.12) continue
     hSegs.push({
       from: ext.from,
       to: ext.to,
@@ -224,10 +236,10 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
   }
   const vSegs: { from: number; to: number; thick: number; center: number }[] = []
   for (const b of vBands) {
-    const ext = darkExtent(dark, w, h, false, b.start, b.end, 0.5)
+    const ext = darkExtent(dark, w, h, false, b.start, b.end, 0.35)
     if (!ext) continue
     const len = ext.to - ext.from
-    if (len < h * 0.18) continue
+    if (len < h * 0.12) continue
     vSegs.push({
       from: ext.from,
       to: ext.to,
