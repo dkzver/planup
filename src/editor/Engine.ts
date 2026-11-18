@@ -638,7 +638,7 @@ export class Engine {
     this.rebuild(s.id)
   }
 
-  /** Квартира по обмерному плану projectfortest */
+  /** Квартира по обмерному плану projectfortest: окна на севере, кухня у западной глухой стены */
   loadApartmentProject() {
     this.clearDoc()
     if (this.underlay) {
@@ -652,7 +652,7 @@ export class Engine {
     this.labelMeta = []
 
     const EXT = 0.2
-    const INT = 0.1
+    const INT = 0.12
     const door = (offset: number, w = 0.85, h = 2.1): OpeningData => ({
       id: uid(),
       type: 'door',
@@ -661,7 +661,7 @@ export class Engine {
       height: h,
       sill: 0,
     })
-    const win = (offset: number, w = 1.4, h = 1.4, sill = 0.9): OpeningData => ({
+    const win = (offset: number, w = 1.3, h = 1.5, sill = 0.85): OpeningData => ({
       id: uid(),
       type: 'window',
       offset,
@@ -669,104 +669,121 @@ export class Engine {
       height: h,
       sill,
     })
+    const fr = (offset: number, w = 0.95, h = 2.25): OpeningData => ({
+      id: uid(),
+      type: 'door',
+      offset,
+      width: w,
+      height: h,
+      sill: 0.05,
+    })
 
-    // Балкон 5.9 × 1.6
-    this.addWallAx(1.2, -1.6, 7.1, -1.6, INT)
-    this.addWallAx(1.2, -1.6, 1.2, 0, INT)
-    this.addWallAx(7.1, -1.6, 7.1, 0, INT)
+    // Балкон 5.91 × 1.65, выступ на север, X 0.9..6.81
+    this.addWallAx(0.9, -1.65, 6.81, -1.65, INT)
+    this.addWallAx(0.9, -1.65, 0.9, 0, INT)
+    this.addWallAx(6.81, -1.65, 6.81, 0, INT)
 
-    // Север квартиры: два выхода на балкон + окно спальни
-    this.addWallAx(0, 0, 11.8, 0, EXT, [
-      win(2.7, 1.5, 2.25, 0.05),
-      win(4.9, 1.5, 2.25, 0.05),
-      win(9.6, 1.6, 1.5, 0.9),
+    // Север гостиной: 3 окна + 2 двери на балкон (кухню сюда не ставить)
+    this.addWallAx(0, 0, 7.93, 0, EXT, [
+      win(1.05, 1.25, 1.5, 0.85),
+      win(2.55, 1.25, 1.5, 0.85),
+      win(4.05, 1.25, 1.5, 0.85),
+      fr(5.45, 0.95, 2.25),
+      fr(6.55, 0.95, 2.25),
     ])
-    // Запад
-    this.addWallAx(0, 0, 0, 8.6, EXT)
-    // Восток
-    this.addWallAx(11.8, 0, 11.8, 8.6, EXT)
-    // Юг + вход
-    this.addWallAx(0, 8.6, 11.8, 8.6, EXT, [door(7.4, 0.95, 2.1)])
+    // Север спальни: окно
+    this.addWallAx(7.93, 0, 12.05, 0, EXT, [win(2.0, 1.6, 1.5, 0.85)])
 
-    // Гостиная / спальня перегородка
-    this.addWallAx(8.0, 0, 8.0, 6.2, INT, [door(5.3, 0.85, 2.1)])
-    // Юг спальни (дверь из коридора)
-    this.addWallAx(8.0, 6.2, 11.8, 6.2, INT, [door(0.9, 0.85, 2.1)])
-    // Запад ванной
-    this.addWallAx(9.2, 6.2, 9.2, 8.6, INT, [door(1.2, 0.75, 2.05)])
-    // Санузел: коробка в гостиной у входа
-    this.addWallAx(5.6, 5.0, 7.0, 5.0, INT, [door(0.7, 0.7, 2.0)])
-    this.addWallAx(5.6, 5.0, 5.6, 6.5, INT)
-    this.addWallAx(7.0, 5.0, 7.0, 6.5, INT)
-    this.addWallAx(5.6, 6.5, 7.0, 6.5, INT)
+    // Запад гостиной — глухая, кухня здесь
+    this.addWallAx(0, 0, 0, 6.56, EXT)
+    // Восток спальни — глухая
+    this.addWallAx(12.05, 0, 12.05, 5.42, EXT)
+
+    // Перегородка гостиная / спальня-коридор, дверь в прихожую у юга
+    this.addWallAx(7.93, 0, 7.93, 6.56, INT, [door(5.7, 0.85, 2.1)])
+
+    // Юг спальни, дверь из коридора
+    this.addWallAx(7.93, 5.42, 12.05, 5.42, INT, [door(0.75, 0.8, 2.1)])
+
+    // Ванная: запад (дверь из коридора) и юг
+    this.addWallAx(9.55, 5.42, 9.55, 8.39, INT, [door(1.35, 0.75, 2.05)])
+    this.addWallAx(9.55, 8.39, 12.05, 8.39, EXT)
+
+    // Юг гостиной слева от санузла
+    this.addWallAx(0, 6.56, 4.35, 6.56, EXT)
+    // Санузел: коробка 1.28 × 1.63 в юго-восточной части гостиной
+    this.addWallAx(4.35, 4.93, 5.63, 4.93, INT)
+    this.addWallAx(4.35, 4.93, 4.35, 6.56, INT)
+    this.addWallAx(5.63, 4.93, 5.63, 6.56, INT, [door(0.8, 0.7, 2.0)])
+    this.addWallAx(4.35, 6.56, 5.63, 6.56, EXT)
+    // Прихожая юг + вход
+    this.addWallAx(5.63, 6.56, 7.93, 6.56, EXT, [door(1.15, 0.95, 2.1)])
 
     // Полы
     this.addFloorRoom(
       [
-        { x: 0.2, z: 0.2 },
-        { x: 7.9, z: 0.2 },
-        { x: 7.9, z: 8.4 },
-        { x: 0.2, z: 8.4 },
+        { x: 0.15, z: 0.15 },
+        { x: 7.85, z: 0.15 },
+        { x: 7.85, z: 6.45 },
+        { x: 0.15, z: 6.45 },
       ],
       '#ead9bd',
     )
     this.addFloorRoom(
       [
-        { x: 8.2, z: 0.2 },
-        { x: 11.6, z: 0.2 },
-        { x: 11.6, z: 6.0 },
-        { x: 8.2, z: 6.0 },
+        { x: 8.1, z: 0.15 },
+        { x: 11.9, z: 0.15 },
+        { x: 11.9, z: 5.3 },
+        { x: 8.1, z: 5.3 },
       ],
       '#cfe0c8',
     )
     this.addFloorRoom(
       [
-        { x: 9.35, z: 6.4 },
-        { x: 11.6, z: 6.4 },
-        { x: 11.6, z: 8.4 },
-        { x: 9.35, z: 8.4 },
+        { x: 9.7, z: 5.55 },
+        { x: 11.9, z: 5.55 },
+        { x: 11.9, z: 8.25 },
+        { x: 9.7, z: 8.25 },
       ],
       '#bcd8ea',
     )
     this.addFloorRoom(
       [
-        { x: 5.75, z: 5.15 },
-        { x: 6.9, z: 5.15 },
-        { x: 6.9, z: 6.35 },
-        { x: 5.75, z: 6.35 },
+        { x: 4.5, z: 5.05 },
+        { x: 5.5, z: 5.05 },
+        { x: 5.5, z: 6.45 },
+        { x: 4.5, z: 6.45 },
       ],
       '#c8d8e8',
     )
     this.addFloorRoom(
       [
-        { x: 1.3, z: -1.5 },
-        { x: 7.0, z: -1.5 },
-        { x: 7.0, z: -0.1 },
-        { x: 1.3, z: -0.1 },
+        { x: 1.05, z: -1.5 },
+        { x: 6.65, z: -1.5 },
+        { x: 6.65, z: -0.1 },
+        { x: 1.05, z: -0.1 },
       ],
       '#d0d8e0',
     )
     this.addFloorRoom(
       [
-        { x: 8.1, z: 6.4 },
-        { x: 9.2, z: 6.4 },
-        { x: 9.2, z: 8.4 },
-        { x: 7.3, z: 8.4 },
-        { x: 7.3, z: 6.7 },
-        { x: 8.1, z: 6.7 },
+        { x: 5.78, z: 5.1 },
+        { x: 7.85, z: 5.1 },
+        { x: 7.85, z: 6.45 },
+        { x: 5.78, z: 6.45 },
       ],
       '#ddd8d0',
     )
 
-    this.addLabel('Кухня-гостиная', 4.0, 3.6)
-    this.addLabel('Спальня №2', 9.9, 3.0)
-    this.addLabel('Ванная', 10.4, 7.4)
-    this.addLabel('Санузел', 6.3, 5.75)
-    this.addLabel('Балкон', 4.15, -0.8)
-    this.addLabel('Прихожая', 8.2, 7.6)
-    this.addLabel('Вход ↓', 7.4, 9.2)
+    this.addLabel('Кухня-гостиная', 3.8, 3.4)
+    this.addLabel('Спальня №2', 10.0, 2.6)
+    this.addLabel('Ванная', 10.8, 6.9)
+    this.addLabel('Санузел', 5.0, 5.75)
+    this.addLabel('Балкон', 3.85, -0.8)
+    this.addLabel('Прихожая', 6.8, 5.75)
+    this.addLabel('Вход ↓', 6.8, 7.2)
 
-    // Основная мебель
+    // Основная мебель: кухня у западной глухой стены, не под окнами
     const put = (type: string, x: number, z: number, rotDeg = 0) => {
       const f: FurnData = {
         kind: 'furn',
@@ -780,42 +797,45 @@ export class Engine {
       this.rebuild(f.id)
     }
 
-    // Кухня-гостиная
-    put('kitchen', 1.7, 0.55, 0)
-    put('fridge', 3.3, 0.55, 0)
-    put('sofa', 2.4, 6.8, 0)
-    put('table-coffee', 2.4, 5.4, 0)
-    put('table-dine', 5.6, 3.2, 0)
-    put('chair', 5.0, 2.5, 0)
-    put('chair', 6.2, 2.5, 0)
-    put('chair', 5.0, 3.9, 180)
-    put('chair', 6.2, 3.9, 180)
-    put('tv-stand', 5.8, 0.55, 0)
+    // Кухня вдоль запада (глухая стена), фронт на восток
+    put('kitchen', 0.45, 1.9, 90)
+    put('fridge', 0.48, 3.7, 90)
+    // ТВ у запада южнее кухни, диван напротив
+    put('tv-stand', 0.55, 5.3, 90)
+    put('sofa', 3.6, 5.3, 270)
+    put('table-coffee', 2.5, 5.3, 0)
+    // Обеденный стол в восточной части гостиной
+    put('table-dine', 6.1, 2.1, 0)
+    put('chair', 5.5, 1.5, 0)
+    put('chair', 6.7, 1.5, 0)
+    put('chair', 5.5, 2.7, 180)
+    put('chair', 6.7, 2.7, 180)
 
-    // Спальня
-    put('bed-double', 9.9, 1.4, 0)
-    put('nightstand', 8.9, 0.55, 0)
-    put('nightstand', 10.9, 0.55, 0)
-    put('wardrobe', 9.9, 5.55, 180)
+    // Спальня: изголовье к восточной глухой стене, окно на севере свободно
+    put('bed-double', 10.8, 2.0, 270)
+    put('nightstand', 11.45, 0.85, 0)
+    put('nightstand', 11.45, 3.15, 0)
+    put('wardrobe', 9.1, 4.7, 90)
 
     // Ванная
-    put('bath', 10.7, 7.4, 90)
-    put('sink', 9.7, 6.7, 0)
-    put('toilet', 9.6, 7.9, 180)
+    put('bath', 11.15, 6.6, 90)
+    put('sink', 9.95, 6.15, 180)
+    put('toilet', 9.9, 7.6, 180)
 
     // Санузел
-    put('toilet', 6.3, 5.5, 180)
-    put('sink', 6.3, 6.1, 0)
+    put('toilet', 5.05, 5.4, 180)
+    put('sink', 5.05, 6.1, 0)
 
     // Прихожая
-    put('wardrobe-hall', 8.4, 8.25, 0)
-    put('shoe', 7.5, 7.0, 90)
+    put('shoe', 6.5, 6.25, 180)
+    put('wardrobe-hall', 7.55, 5.7, 90)
 
     this.emitCount()
     this.historyPush()
     this.frameAll()
-    this.cb.onHint?.('Сцена собрана по обмерному плану. Проёмы можно тянуть.')
+    this.cb.onHint?.('Сцена по плану: кухня у западной стены, окна на севере. Мебель можно двигать.')
   }
+
 
   /** Объёмы основных работ по текущей модели */
   getWorkVolumes(): WorkVolumes {
