@@ -1,13 +1,13 @@
 /**
  * Детектор стен на растровом плане квартиры.
  *
- * Идея: чертёж — это длинные толстые ортогональные тёмные линии на светлом фоне.
- * 1) Рендерим в canvas, grayscale, Otsu-порог
- * 2) Ищем горизонтальные и вертикальные «полосы» тёмного (стены)
- * 3) Отбрасываем тонкие (размерные линии, текст) и пятна
- * 4) Переводим в метры, чистим, отдаём сегменты
- *
- * Если линий мало / нет замкнутого контура — это не план.
+ * Пайплайн:
+ * 1) grayscale
+ * 2) варианты предобработки: как есть, контраст, инверсия, контраст+инверсия
+ * 3) Otsu → тёмная маска
+ * 4) морфологическое замыкание по строкам/столбцам (окна не рвут стены)
+ * 5) полосы стен, рамки листа отбрасываются
+ * 6) если попытка не удалась — следующая предобработка
  */
 
 export interface DetectedWall {
@@ -22,19 +22,15 @@ export interface DetectResult {
   ok: boolean
   error?: string
   walls?: DetectedWall[]
-  /** габариты обнаруженного плана, м */
   widthM?: number
   heightM?: number
   confidence?: number
-  /** габариты в пикселях исходного canvas */
   bboxPx?: { minX: number; minY: number; maxX: number; maxY: number }
 }
 
 interface Band {
   start: number
   end: number
-  from: number
-  to: number
 }
 
 function otsu(hist: Float64Array, total: number): number {
@@ -61,6 +57,25 @@ function otsu(hist: Float64Array, total: number): number {
   return thr
 }
 
+function contrastStretch(src: Uint8Array, n: number): Uint8Array {
+  let mn = 255
+  let mx = 0
+  for (let i = 0; i < n; i++) {
+    if (src[i] < mn) mn = src[i]
+    if (src[i] > mx) mx = src[i]
+  }
+  const range = mx - mn || 1
+  const out = new Uint8Array(n)
+  for (let i = 0; i < n; i++) out[i] = ((src[i] - mn) * 255 / range) | 0
+  return out
+}
+
+function invertArr(src: Uint8Array): Uint8Array {
+  const out = new Uint8Array(src.length)
+  for (let i = 0; i < src.length; i++) out[i] = 255 - src[i]
+  return out
+}
+
 function findBands(count: Int32Array, thresh: number, minThick: number, maxThick: number): Band[] {
   const bands: Band[] = []
   let start = -1
@@ -72,7 +87,7 @@ function findBands(count: Int32Array, thresh: number, minThick: number, maxThick
       const end = i - 1
       const thick = end - start + 1
       if (thick >= minThick && thick <= maxThick) {
-        bands.push({ start, end, from: start, to: end })
+        bands.push({ start, end })
       }
       start = -1
     }
@@ -80,7 +95,6 @@ function findBands(count: Int32Array, thresh: number, minThick: number, maxThick
   return bands
 }
 
-/** диапазон тёмных пикселей вдоль полосы */
 function darkExtent(
   dark: Uint8Array,
   w: number,
@@ -108,7 +122,7 @@ function darkExtent(
       cnt++
     }
   }
-  if (from < 0 || cnt / len < 0.15) return null
+  if (from < 0 || cnt / len < 0.1) return null
   return { from, to }
 }
 
@@ -134,8 +148,190 @@ function mergeSegs(
   return out
 }
 
+function closeCount(src: Int32Array, len: number, rad: number): Int32Array {
+  const out = new Int32Array(len)
+  for (let i = 0; i < len; i++) {
+    let m = 0
+    for (let k = -rad; k <= rad; k++) {
+      const j = i + k
+      if (j >= 0 && j < len && src[j] > m) m = src[j]
+    }
+    out[i] = m
+  }
+  return out
+}
+
+function detectFromGray(gray: Uint8Array, w: number, h: number): DetectResult {
+  const n = w * h
+  const hist = new Float64Array(256)
+  for (let i = 0; i < n; i++) hist[gray[i]]++
+  const thrRaw = otsu(hist, n)
+  const thr = Math.min(200, Math.max(50, thrRaw + 12))
+  const dark = new Uint8Array(n)
+  let darkCnt = 0
+  for (let i = 0; i < n; i++) {
+    if (gray[i] < thr) {
+      dark[i] = 1
+      darkCnt++
+    }
+  }
+  const darkRatio = darkCnt / n
+  if (darkRatio < 0.008) return { ok: false, error: 'почти нет тёмных линий' }
+  if (darkRatio > 0.8) return { ok: false, error: 'документ залит' }
+
+  const minThick = Math.max(3, Math.round(Math.min(w, h) * 0.005))
+  const maxThick = Math.max(24, Math.round(Math.min(w, h) * 0.12))
+  const rad = Math.max(4, minThick)
+
+  const rowCount = new Int32Array(h)
+  const colCount = new Int32Array(w)
+  for (let y = 0; y < h; y++) {
+    let r = 0
+    for (let x = 0; x < w; x++) r += dark[y * w + x]
+    rowCount[y] = r
+  }
+  for (let x = 0; x < w; x++) {
+    let c = 0
+    for (let y = 0; y < h; y++) c += dark[y * w + x]
+    colCount[x] = c
+  }
+  const rowClosed = closeCount(rowCount, h, rad)
+  const colClosed = closeCount(colCount, w, rad)
+
+  const tryFrac = (frac: number) => ({
+    hBands: findBands(rowClosed, Math.round(w * frac), minThick, maxThick),
+    vBands: findBands(colClosed, Math.round(h * frac), minThick, maxThick),
+  })
+
+  let { hBands, vBands } = tryFrac(0.18)
+  if (hBands.length < 2 || vBands.length < 2) {
+    const second = tryFrac(0.1)
+    if (second.hBands.length + second.vBands.length > hBands.length + vBands.length) {
+      hBands = second.hBands
+      vBands = second.vBands
+    }
+  }
+
+  const edgeH = h * 0.03
+  const edgeV = w * 0.03
+  hBands = hBands.filter((b) => {
+    const c = (b.start + b.end) / 2
+    return c > edgeH && c < h - edgeH
+  })
+  vBands = vBands.filter((b) => {
+    const c = (b.start + b.end) / 2
+    return c > edgeV && c < w - edgeV
+  })
+
+  if (hBands.length < 2 || vBands.length < 2) {
+    return { ok: false, error: 'не найдены ортогональные линии стен' }
+  }
+
+  const hSegs: { from: number; to: number; thick: number; center: number }[] = []
+  for (const b of hBands) {
+    const ext = darkExtent(dark, w, h, true, b.start, b.end, 0.22)
+    if (!ext) continue
+    if (ext.to - ext.from < w * 0.1) continue
+    hSegs.push({
+      from: ext.from,
+      to: ext.to,
+      thick: b.end - b.start + 1,
+      center: (b.start + b.end) / 2,
+    })
+  }
+  const vSegs: { from: number; to: number; thick: number; center: number }[] = []
+  for (const b of vBands) {
+    const ext = darkExtent(dark, w, h, false, b.start, b.end, 0.22)
+    if (!ext) continue
+    if (ext.to - ext.from < h * 0.1) continue
+    vSegs.push({
+      from: ext.from,
+      to: ext.to,
+      thick: b.end - b.start + 1,
+      center: (b.start + b.end) / 2,
+    })
+  }
+
+  const hMerged = mergeSegs(hSegs, w * 0.05, maxThick * 1.8)
+  const vMerged = mergeSegs(vSegs, h * 0.05, maxThick * 1.8)
+  if (hMerged.length < 2 || vMerged.length < 2) {
+    return { ok: false, error: 'не найден контур стен' }
+  }
+
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const s of hMerged) {
+    minX = Math.min(minX, s.from)
+    maxX = Math.max(maxX, s.to)
+    minY = Math.min(minY, s.center - s.thick / 2)
+    maxY = Math.max(maxY, s.center + s.thick / 2)
+  }
+  for (const s of vMerged) {
+    minX = Math.min(minX, s.center - s.thick / 2)
+    maxX = Math.max(maxX, s.center + s.thick / 2)
+    minY = Math.min(minY, s.from)
+    maxY = Math.max(maxY, s.to)
+  }
+  const bw = maxX - minX
+  const bh = maxY - minY
+  if (bw < 60 || bh < 60) return { ok: false, error: 'линии слишком малы для плана' }
+  const aspect = bw / bh
+  if (aspect < 0.15 || aspect > 6) return { ok: false, error: 'пропорции не похожи на план' }
+
+  const maxPx = Math.max(bw, bh)
+  const mPerPx = 12 / maxPx
+  const clampT = (tpx: number) => {
+    const t = tpx * mPerPx
+    if (!isFinite(t) || t <= 0) return 0.2
+    return Math.min(0.45, Math.max(0.08, t))
+  }
+
+  const walls: DetectedWall[] = []
+  for (const s of hMerged) {
+    const len = (s.to - s.from) * mPerPx
+    if (len < 0.9) continue
+    walls.push({
+      x1: (s.from - minX) * mPerPx,
+      z1: (s.center - minY) * mPerPx,
+      x2: (s.to - minX) * mPerPx,
+      z2: (s.center - minY) * mPerPx,
+      thickness: clampT(s.thick),
+    })
+  }
+  for (const s of vMerged) {
+    const len = (s.to - s.from) * mPerPx
+    if (len < 0.9) continue
+    walls.push({
+      x1: (s.center - minX) * mPerPx,
+      z1: (s.from - minY) * mPerPx,
+      x2: (s.center - minX) * mPerPx,
+      z2: (s.to - minY) * mPerPx,
+      thickness: clampT(s.thick),
+    })
+  }
+  if (walls.length < 4) return { ok: false, error: 'слишком мало стен' }
+
+  const hasTop = hMerged.some((s) => s.center - minY < bh * 0.18)
+  const hasBot = hMerged.some((s) => s.center - minY > bh * 0.82)
+  const hasLeft = vMerged.some((s) => s.center - minX < bw * 0.18)
+  const hasRight = vMerged.some((s) => s.center - minX > bw * 0.82)
+  const closed = [hasTop, hasBot, hasLeft, hasRight].filter(Boolean).length
+  if (closed < 3) return { ok: false, error: 'нет замкнутого периметра' }
+
+  return {
+    ok: true,
+    walls,
+    widthM: bw * mPerPx,
+    heightM: bh * mPerPx,
+    confidence: closed / 4,
+    bboxPx: { minX, minY, maxX, maxY },
+  }
+}
+
 export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
-  const MAX = 1100
+  const MAX = 1200
   const sw = source.width
   const sh = source.height
   if (!sw || !sh) return { ok: false, error: 'Пустой документ' }
@@ -155,229 +351,28 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
   const n = w * h
 
   const gray = new Uint8Array(n)
-  const hist = new Float64Array(256)
   for (let i = 0; i < n; i++) {
-    const r = d[i * 4]
-    const g = d[i * 4 + 1]
-    const b = d[i * 4 + 2]
-    const v = (0.299 * r + 0.587 * g + 0.114 * b) | 0
-    gray[i] = v
-    hist[v]++
-  }
-  const thr = Math.min(180, Math.max(60, otsu(hist, n) + 10))
-  const dark = new Uint8Array(n)
-  let darkCnt = 0
-  for (let i = 0; i < n; i++) {
-    if (gray[i] < thr) {
-      dark[i] = 1
-      darkCnt++
-    }
-  }
-  const darkRatio = darkCnt / n
-
-  // слишком пусто или слишком «фото»
-  if (darkRatio < 0.012) {
-    return { ok: false, error: 'В документе почти нет тёмных линий — план квартиры не найден' }
-  }
-  if (darkRatio > 0.72) {
-    return { ok: false, error: 'Документ слишком тёмный/залит — это не похожe на чертёж плана' }
+    gray[i] = (0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]) | 0
   }
 
-  const minThick = Math.max(3, Math.round(Math.min(w, h) * 0.006))
-  const maxThick = Math.max(20, Math.round(Math.min(w, h) * 0.11))
+  // варианты предобработки: обычная, контраст, инверсия, контраст+инверсия
+  const stretched = contrastStretch(gray, n)
+  const variants = [
+    { g: gray, label: 'как есть' },
+    { g: stretched, label: 'контраст' },
+    { g: invertArr(stretched), label: 'контраст+инверсия' },
+    { g: invertArr(gray), label: 'инверсия' },
+  ]
 
-  const rowCount = new Int32Array(h)
-  const colCount = new Int32Array(w)
-  for (let y = 0; y < h; y++) {
-    let r = 0
-    for (let x = 0; x < w; x++) r += dark[y * w + x]
-    rowCount[y] = r
+  let lastErr = 'План квартиры не найден'
+  for (const v of variants) {
+    const res = detectFromGray(v.g, w, h)
+    if (res.ok) return { ...res, error: undefined }
+    lastErr = res.error ?? lastErr
   }
-  for (let x = 0; x < w; x++) {
-    let c = 0
-    for (let y = 0; y < h; y++) c += dark[y * w + x]
-    colCount[x] = c
-  }
-
-  // морфологическое замыкание: окна в стене не разрывают полосу
-  const rad = Math.max(4, minThick)
-  const closeCount = (src: Int32Array, len: number) => {
-    const out = new Int32Array(len)
-    for (let i = 0; i < len; i++) {
-      let m = 0
-      for (let k = -rad; k <= rad; k++) {
-        const j = i + k
-        if (j >= 0 && j < len && src[j] > m) m = src[j]
-      }
-      out[i] = m
-    }
-    return out
-  }
-  const rowClosed = closeCount(rowCount, h)
-  const colClosed = closeCount(colCount, w)
-
-  const tryFrac = (frac: number) => {
-    const hBands = findBands(rowClosed, Math.round(w * frac), minThick, maxThick)
-    const vBands = findBands(colClosed, Math.round(h * frac), minThick, maxThick)
-    return { hBands, vBands }
-  }
-
-  // два прохода: сначала строгий, потом мягче
-  let { hBands, vBands } = tryFrac(0.22)
-  if (hBands.length < 2 || vBands.length < 2) {
-    const second = tryFrac(0.13)
-    if (second.hBands.length + second.vBands.length > hBands.length + vBands.length) {
-      hBands = second.hBands
-      vBands = second.vBands
-    }
-  }
-  // рамки листа не стены
-  const edgeH = h * 0.035
-  const edgeV = w * 0.035
-  hBands = hBands.filter((b) => {
-    const c = (b.start + b.end) / 2
-    return c > edgeH && c < h - edgeH
-  })
-  vBands = vBands.filter((b) => {
-    const c = (b.start + b.end) / 2
-    return c > edgeV && c < w - edgeV
-  })
-
-  if (hBands.length < 2 || vBands.length < 2) {
-    return {
-      ok: false,
-      error: 'Не найдены ортогональные линии стен. В документе нет плана квартиры/помещения.',
-    }
-  }
-
-  // сегменты стен в пикселях
-  const hSegs: { from: number; to: number; thick: number; center: number }[] = []
-  for (const b of hBands) {
-    const ext = darkExtent(dark, w, h, true, b.start, b.end, 0.35)
-    if (!ext) continue
-    const len = ext.to - ext.from
-    if (len < w * 0.12) continue
-    hSegs.push({
-      from: ext.from,
-      to: ext.to,
-      thick: b.end - b.start + 1,
-      center: (b.start + b.end) / 2,
-    })
-  }
-  const vSegs: { from: number; to: number; thick: number; center: number }[] = []
-  for (const b of vBands) {
-    const ext = darkExtent(dark, w, h, false, b.start, b.end, 0.35)
-    if (!ext) continue
-    const len = ext.to - ext.from
-    if (len < h * 0.12) continue
-    vSegs.push({
-      from: ext.from,
-      to: ext.to,
-      thick: b.end - b.start + 1,
-      center: (b.start + b.end) / 2,
-    })
-  }
-
-  const hMerged = mergeSegs(hSegs, w * 0.04, maxThick * 1.6)
-  const vMerged = mergeSegs(vSegs, h * 0.04, maxThick * 1.6)
-
-  if (hMerged.length < 2 || vMerged.length < 2) {
-    return {
-      ok: false,
-      error: 'Не найден замкнутый контур стен. В документе нет плана квартиры/помещения.',
-    }
-  }
-
-  // габариты в пикселях
-  let minX = Infinity
-  let maxX = -Infinity
-  let minY = Infinity
-  let maxY = -Infinity
-  for (const s of hMerged) {
-    minX = Math.min(minX, s.from)
-    maxX = Math.max(maxX, s.to)
-    minY = Math.min(minY, s.center - s.thick / 2)
-    maxY = Math.max(maxY, s.center + s.thick / 2)
-  }
-  for (const s of vMerged) {
-    minX = Math.min(minX, s.center - s.thick / 2)
-    maxX = Math.max(maxX, s.center + s.thick / 2)
-    minY = Math.min(minY, s.from)
-    maxY = Math.max(maxY, s.to)
-  }
-  const bw = maxX - minX
-  const bh = maxY - minY
-  if (bw < 80 || bh < 80) {
-    return { ok: false, error: 'Найденные линии слишком малы для плана квартиры' }
-  }
-  const aspect = bw / bh
-  if (aspect < 0.18 || aspect > 5.5) {
-    return { ok: false, error: 'Пропорции найденного контура не похожи на план помещения' }
-  }
-
-  // масштаб: большая сторона = 12 м (типовая квартира/дом); можно уточнить
-  const maxPx = Math.max(bw, bh)
-  const mPerPx = 12 / maxPx
-
-  const clampT = (tpx: number) => {
-    const t = tpx * mPerPx
-    if (!isFinite(t) || t <= 0) return 0.2
-    return Math.min(0.45, Math.max(0.1, t))
-  }
-
-  const walls: DetectedWall[] = []
-  for (const s of hMerged) {
-    const len = (s.to - s.from) * mPerPx
-    if (len < 1.1) continue
-    walls.push({
-      x1: (s.from - minX) * mPerPx,
-      z1: (s.center - minY) * mPerPx,
-      x2: (s.to - minX) * mPerPx,
-      z2: (s.center - minY) * mPerPx,
-      thickness: clampT(s.thick),
-    })
-  }
-  for (const s of vMerged) {
-    const len = (s.to - s.from) * mPerPx
-    if (len < 1.1) continue
-    walls.push({
-      x1: (s.center - minX) * mPerPx,
-      z1: (s.from - minY) * mPerPx,
-      x2: (s.center - minX) * mPerPx,
-      z2: (s.to - minY) * mPerPx,
-      thickness: clampT(s.thick),
-    })
-  }
-
-  if (walls.length < 4) {
-    return {
-      ok: false,
-      error: 'Найдено слишком мало стен (нужно минимум 4). Это не план помещения.',
-    }
-  }
-
-  // уверенность: насколько контур похож на прямоугольник
-  const hasTop = hMerged.some((s) => s.center - minY < bh * 0.15)
-  const hasBot = hMerged.some((s) => s.center - minY > bh * 0.85)
-  const hasLeft = vMerged.some((s) => s.center - minX < bw * 0.15)
-  const hasRight = vMerged.some((s) => s.center - minX > bw * 0.85)
-  const closed = [hasTop, hasBot, hasLeft, hasRight].filter(Boolean).length
-  const confidence = closed / 4
-
-  if (closed < 3) {
-    return {
-      ok: false,
-      error: 'Не найден замкнутый периметр стен (нужны все четыре стороны). Это не план квартиры.',
-    }
-  }
-
   return {
-    ok: true,
-    walls,
-    widthM: bw * mPerPx,
-    heightM: bh * mPerPx,
-    confidence,
-    bboxPx: { minX, minY, maxX, maxY },
+    ok: false,
+    error: `План квартиры в документе не найден (${lastErr}). Попробованы: контраст, инверсия.`,
   }
 }
 
