@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { buildFurnMesh, furnDef, type FurnArrangement, type FurnData } from './furniture'
+import type { DetectedWall } from './planDetect'
 
 export type ToolId =
   | 'select'
@@ -793,6 +794,47 @@ export class Engine {
     this.cb.onHint?.('Стены собраны. Кнопка «Расставить мебель» — выбрать предметы и применить.')
   }
 
+
+  /** Построить стены из детектора плана */
+  loadDetectedWalls(walls: DetectedWall[]) {
+    this.clearDoc()
+    if (this.underlay) {
+      this.scene.remove(this.underlay)
+      this.underlay = null
+    }
+    for (const s of this.labels) this.scene.remove(s)
+    this.labels = []
+    this.labelMeta = []
+    for (const w of walls) {
+      this.addWallAx(w.x1, w.z1, w.x2, w.z2, Math.max(0.1, w.thickness))
+    }
+    // пол по габариту
+    let minX = Infinity
+    let maxX = -Infinity
+    let minZ = Infinity
+    let maxZ = -Infinity
+    for (const w of walls) {
+      minX = Math.min(minX, w.x1, w.x2)
+      maxX = Math.max(maxX, w.x1, w.x2)
+      minZ = Math.min(minZ, w.z1, w.z2)
+      maxZ = Math.max(maxZ, w.z1, w.z2)
+    }
+    if (isFinite(minX) && maxX - minX > 1) {
+      this.addFloorRoom(
+        [
+          { x: minX + 0.15, z: minZ + 0.15 },
+          { x: maxX - 0.15, z: minZ + 0.15 },
+          { x: maxX - 0.15, z: maxZ - 0.15 },
+          { x: minX + 0.15, z: maxZ - 0.15 },
+        ],
+        '#ead9bd',
+      )
+    }
+    this.emitCount()
+    this.historyPush()
+    this.frameAll()
+    this.cb.onHint?.(`Построено стен: ${walls.length}. Проверьте периметр, мебель — кнопкой «Расставить мебель».`)
+  }
 
   /** Типовые места мебели в собранной квартире */
   private static SLOTS: Record<string, { x: number; z: number; rot: number }[]> = {

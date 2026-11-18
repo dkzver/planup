@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Engine, type ToolId, type SelInfo, type OpeningData, type WorkVolumes } from '../editor/Engine'
 import { FURNITURE, type FurnArrangement } from '../editor/furniture'
+import { detectPlanWalls, fileToCanvas } from '../editor/planDetect'
 
 const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
   { id: 'select', icon: '⬈', label: 'Выбор', key: 'S' },
@@ -232,47 +233,17 @@ export default function EditorPage() {
 
   const loadPlanFile = async (file: File) => {
     try {
-      if (file.type.startsWith('image/')) {
-        const url = URL.createObjectURL(file)
-        engineRef.current?.setUnderlay(url, 14, 10)
-        flash('План загружен как подложка')
+      flash('Анализирую документ…')
+      const canvas = await fileToCanvas(file, 1600)
+      const res = detectPlanWalls(canvas)
+      if (!res.ok || !res.walls) {
+        flash(res.error ?? 'План квартиры в документе не найден')
         return
       }
-      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-        flash('Рендерю PDF…')
-        const pdfUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.min.mjs'
-        const pdfjs = await import(/* @vite-ignore */ pdfUrl)
-        const lib = (pdfjs as unknown as {
-          GlobalWorkerOptions: { workerSrc: string }
-          getDocument: (o: { data: ArrayBuffer }) => {
-            promise: Promise<{
-              getPage: (n: number) => Promise<{
-                getViewport: (o: { scale: number }) => { width: number; height: number }
-                render: (o: { canvasContext: CanvasRenderingContext2D; viewport: unknown }) => {
-                  promise: Promise<void>
-                }
-              }>
-            }>
-          }
-        })
-        lib.GlobalWorkerOptions.workerSrc =
-          'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.worker.min.mjs'
-        const buf = await file.arrayBuffer()
-        const doc = await lib.getDocument({ data: buf }).promise
-        const page = await doc.getPage(1)
-        const vp = page.getViewport({ scale: 2 })
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.round(vp.width)
-        canvas.height = Math.round(vp.height)
-        const ctx = canvas.getContext('2d')!
-        await page.render({ canvasContext: ctx, viewport: vp }).promise
-        const url = canvas.toDataURL('image/png')
-        // лист A3 ~ 16.7 × 11.8 м при 71 см/м... план квартиры ~ 12 м шириной
-        engineRef.current?.setUnderlay(url, 16, 11.3)
-        flash('PDF-план загружен подложкой. Кнопка «Собрать квартиру» — готовая сцена.')
-        return
-      }
-      flash('Поддержаны PNG/JPG/PDF')
+      engineRef.current?.loadDetectedWalls(res.walls)
+      flash(
+        `План распознан: стен ${res.walls.length}, габарит ~${res.widthM?.toFixed(1)}×${res.heightM?.toFixed(1)} м. Уверенность ${(100 * (res.confidence ?? 0)).toFixed(0)}%`,
+      )
     } catch (err) {
       flash('Не удалось открыть план: ' + (err instanceof Error ? err.message : String(err)))
     }
