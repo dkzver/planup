@@ -4,17 +4,24 @@
 
 **Не является продуктом Trimble SketchUp.** Чистый-room MVP: свои названия, свои ассеты, открытые форматы.
 
+## Live
+
+- GitHub Pages: <https://dkzver.github.io/planup/>
+- Редактор: <https://dkzver.github.io/planup/#/editor>
+
+Нужен браузер с WebGL (Chrome, Edge, Firefox).
+
 ## Страницы
 
-- `/` — лендинг (без авторизации)
-- `/editor` — 3D-редактор
+- `#/` — лендинг (без авторизации)
+- `#/editor` — 3D-редактор
 
 ## Стек
 
 - Vite + React + TypeScript
 - Three.js (viewport)
-- react-router-dom
-- Статический деплой на Render (`render.yaml`)
+- react-router-dom (HashRouter — работает на Pages и Render без rewrite-магии)
+- Статический деплой: GitHub Pages + `render.yaml` для Render
 
 ## Редактор
 
@@ -40,6 +47,26 @@ npm run dev
 npm run build
 ```
 
-## Deploy (Render)
+## Deploy
 
-Статический сайт из `render.yaml`: `npm ci && npm run build`, публикация `dist`, SPA-rewrite на `index.html`.
+### GitHub Pages
+
+Ветка `gh-pages` обновляется командой:
+
+```bash
+npm run build
+npx gh-pages -d dist
+```
+
+Pages настроен на branch `gh-pages`, `/` .
+
+### Render
+
+В репозитории есть `render.yaml` (static site, SPA). Чтобы поднять на Render:
+
+1. Зайдите на <https://dashboard.render.com> через GitHub.
+2. **New → Static Site** → подключите `dkzver/planup`.
+3. Render прочитает `render.yaml` (build: `npm ci && npm run build`, publish: `dist`, rewrite на `index.html`).
+4. Deploy.
+
+Либо создайте Deploy Hook и добавьте его в GitHub Secrets как `RENDER_DEPLOY_HOOK_URL` — тогда можно пушить автодеплой.
