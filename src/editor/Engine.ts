@@ -1258,10 +1258,6 @@ export class Engine {
     if (cursor < L - 0.005) {
       addBox(cursor, L - cursor, 0, w.height)
     }
-    // совсем пустая стена (нет проёмов покрыть целиком)
-    if (ops.length === 0) {
-      addBox(0, L, 0, w.height)
-    }
 
     group.position.copy(mid0)
     group.rotation.y = angle
