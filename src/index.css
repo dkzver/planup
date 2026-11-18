@@ -306,6 +306,11 @@ p { line-height: 1.6; }
   padding: 8px;
   margin-top: 8px;
   background: #fafbfc;
+  cursor: pointer;
+}
+.op-card.on {
+  border-color: var(--brand);
+  background: #f0f6ff;
 }
 .op-row {
   display: flex;

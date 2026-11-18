@@ -294,12 +294,12 @@ export default function EditorPage() {
           <div className="panel">
             <h4>Выбрано</h4>
             {sel.kind === null && <p className="note">Ничего не выбрано</p>}
-            {sel.kind === 'wall' && (
+            {sel.kind === 'wall' || sel.kind === 'opening' ? (
               <>
                 <ul className="props">
                   <li>
                     <span>Тип</span>
-                    <b>стена</b>
+                    <b>{sel.kind === 'opening' ? 'проём на стене' : 'стена'}</b>
                   </li>
                   <li>
                     <span>Длина</span>
@@ -326,9 +326,16 @@ export default function EditorPage() {
                     </button>
                   </div>
                 </div>
-                <p className="note">Дверь 0,9×2,1 · окно 1,2×1,2, подоконник 0,9. Можно несколько.</p>
+                <p className="note">
+                  Дверь 0,9×2,1 · окно 1,2×1,2, подоконник 0,9. Можно несколько.
+                  Выберите проём и тяните его по стене — шаг 10 см.
+                </p>
                 {(sel.openings ?? []).map((op: OpeningData) => (
-                  <div key={op.id} className="op-card">
+                  <div
+                    key={op.id}
+                    className={'op-card' + (sel.selectedOpeningId === op.id ? ' on' : '')}
+                    onClick={() => engineRef.current?.selectOpening(op.id)}
+                  >
                     <div className="op-row">
                       <select
                         value={op.type}
@@ -417,7 +424,7 @@ export default function EditorPage() {
                   Удалить стену
                 </button>
               </>
-            )}
+            ) : null}
             {sel.kind === 'solid' && (
               <>
                 <ul className="props">

@@ -23,13 +23,14 @@ export interface OpeningData {
 }
 
 export interface SelInfo {
-  kind: 'wall' | 'solid' | null
+  kind: 'wall' | 'solid' | 'opening' | null
   id?: string
   length?: number
   height?: number
   thickness?: number
   area?: number
   openings?: OpeningData[]
+  selectedOpeningId?: string | null
 }
 
 export interface EditorCallbacks {
@@ -83,7 +84,7 @@ export function round03(v: number): number {
 }
 
 const HINTS: Record<ToolId, string> = {
-  select: 'Кликните стену. Справа — проёмы. Del — удалить.',
+  select: 'Кликните стену или дверь/окно. Тяните проём вдоль стены. Del — удалить.',
   line: 'Только по осям: горизонталь и вертикаль. Клик по первой точке или Enter — замкнуть.',
   rect: 'Два клика: первый угол, второй — противоположный. В «Размере» можно ввести «4, 5».',
   wall: 'Стены строго ортогональны. Кликайте углы. Enter / Esc — закончить.',
@@ -116,6 +117,8 @@ export class Engine {
   private objects: DocObj[] = []
   private idToObj = new Map<string, THREE.Object3D>()
   private selectedId: string | null = null
+  private selectedOpeningId: string | null = null
+  private openingDragged = false
   private undoStack: DocObj[][] = []
   private redoStack: DocObj[][] = []
 
@@ -299,6 +302,10 @@ export class Engine {
   }
 
   deleteSelected() {
+    if (this.selectedOpeningId) {
+      this.removeOpening(this.selectedOpeningId)
+      return
+    }
     if (!this.selectedId) return
     this.historyPush()
     const id = this.selectedId
@@ -338,7 +345,7 @@ export class Engine {
     sel.openings.push(op)
     this.clampOpenings(sel)
     this.rebuild(sel.id)
-    this.emitSelection(sel)
+    this.select(sel.id, op.id)
   }
 
   updateOpening(opId: string, patch: Partial<OpeningData>) {
@@ -371,8 +378,17 @@ export class Engine {
     if (!sel || sel.kind !== 'wall') return
     this.historyPush()
     sel.openings = sel.openings.filter((o) => o.id !== opId)
+    if (this.selectedOpeningId === opId) this.selectedOpeningId = null
     this.rebuild(sel.id)
-    this.emitSelection(sel)
+    this.select(sel.id, this.selectedOpeningId)
+  }
+
+  selectOpening(opId: string | null) {
+    if (!this.selectedId) return
+    const sel = this.getSelected()
+    if (!sel || sel.kind !== 'wall') return
+    if (opId && !sel.openings.some((o) => o.id === opId)) return
+    this.select(sel.id, opId)
   }
 
   private clampOpenings(w: WallData) {
@@ -685,12 +701,13 @@ export class Engine {
     }
     if (obj.kind === 'wall') {
       this.cb.onSelection?.({
-        kind: 'wall',
+        kind: this.selectedOpeningId ? 'opening' : 'wall',
         id: obj.id,
         length: obj.a.distanceTo(obj.b),
         height: obj.height,
         thickness: obj.thickness,
         openings: obj.openings.map((o) => ({ ...o })),
+        selectedOpeningId: this.selectedOpeningId,
       })
     } else {
       this.cb.onSelection?.({
@@ -806,9 +823,12 @@ export class Engine {
     const roots = [...this.idToObj.values()]
     const hits = this.raycaster.intersectObjects(roots, true)
     if (!hits.length) return null
-    let o: THREE.Object3D | null = hits[0].object
+    const hit = hits[0].object
+    // проём — отдельный объект, даже если он внутри группы стены
+    if (hit.userData.openingId) return hit
+    let o: THREE.Object3D | null = hit
     while (o && !o.userData.id) o = o.parent
-    return o ?? hits[0].object
+    return o ?? hit
   }
 
   private quantPlan(v: number): number {
@@ -867,12 +887,16 @@ export class Engine {
         return
       }
       const id = obj.userData.id as string
+      const opId = (obj.userData.openingId as string | undefined) ?? null
       if (t === 'erase') {
         this.selectedId = id
+        this.selectedOpeningId = opId
         this.deleteSelected()
         return
       }
-      this.select(id)
+      this.select(id, opId)
+      // сразу можно тянуть проём инструментом «Выбор»
+      if (opId) this.moveLast = this.pickGround()
       return
     }
 
@@ -882,7 +906,9 @@ export class Engine {
         this.select(null)
         return
       }
-      this.select(obj.userData.id as string)
+      const id = obj.userData.id as string
+      const opId = (obj.userData.openingId as string | undefined) ?? null
+      this.select(id, opId)
       const p = this.pickGround()
       if (p) this.moveLast = p
       return
@@ -971,11 +997,30 @@ export class Engine {
       return
     }
 
-    if (t === 'move' && this.selectedId && this.moveLast && e.buttons & 1) {
+    if ((t === 'move' || t === 'select') && this.selectedId && this.moveLast && e.buttons & 1) {
       const raw = this.pickGround()
       if (!raw) return
       const obj = this.getSelected()
       if (!obj) return
+
+      // перетаскивание проёма вдоль стены, шаг 10 см
+      if (this.selectedOpeningId && obj.kind === 'wall') {
+        const op = obj.openings.find((o) => o.id === this.selectedOpeningId)
+        if (!op) return
+        const dir = new THREE.Vector3().subVectors(obj.b, obj.a).normalize()
+        const L = obj.a.distanceTo(obj.b)
+        const along = new THREE.Vector3().subVectors(raw, obj.a).dot(dir)
+        const next = Math.max(op.width / 2, Math.min(round01(along), round01(L - op.width / 2)))
+        if (Math.abs(next - op.offset) < 0.001) return
+        op.offset = next
+        this.clampOpenings(obj)
+        this.rebuild(obj.id)
+        this.emitSelection(obj)
+        this.moveLast = raw
+        this.openingDragged = true
+        return
+      }
+
       const dx = this.quantPlan(raw.x) - this.quantPlan(this.moveLast.x)
       const dz = this.quantPlan(raw.z) - this.quantPlan(this.moveLast.z)
       if (Math.abs(dx) < 1e-9 && Math.abs(dz) < 1e-9) return
@@ -1018,6 +1063,10 @@ export class Engine {
   private onPointerUp = () => {
     if (this.tool === 'pushpull' && this.pushObj) {
       this.finishPushPull()
+    }
+    if (this.openingDragged) {
+      this.openingDragged = false
+      this.historyPush()
     }
     if (this.tool === 'move' && this.selectedId) {
       this.moveLast = null
@@ -1175,15 +1224,21 @@ export class Engine {
     this.cb.onHint?.('Высота применена. Панель справа обновлена.')
   }
 
-  private select(id: string | null) {
+  private select(id: string | null, openingId: string | null = null) {
     for (const m of this.idToObj.values()) {
       m.traverse((c) => {
         const mesh = c as THREE.Mesh
         const mat = mesh.material as THREE.MeshStandardMaterial | undefined
         if (mat && mat.emissive) mat.emissive.setHex(0x000000)
+        if (mat && mesh.userData.openingId) {
+          // вернуть обычный вид проёма
+          if (mesh.userData.kind === 'opening-door') mat.color.setHex(0x8a6b4a)
+          if (mesh.userData.kind === 'opening-window') mat.color.setHex(0x9ec9e8)
+        }
       })
     }
     this.selectedId = id
+    this.selectedOpeningId = openingId
     if (!id) {
       this.cb.onSelection?.({ kind: null })
       return
@@ -1194,7 +1249,16 @@ export class Engine {
       root.traverse((c) => {
         const mesh = c as THREE.Mesh
         const mat = mesh.material as THREE.MeshStandardMaterial | undefined
-        if (mat && mat.emissive) mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
+        if (!mat || !mat.emissive) return
+        if (mesh.userData.openingId) {
+          // подсветка выбранного проёма — как у стены
+          if (mesh.userData.openingId === openingId) {
+            mat.emissive.setHex(0x1a73e8).multiplyScalar(0.45)
+            mat.color.setHex(0x1a73e8)
+          }
+        } else {
+          mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
+        }
       })
     }
     this.emitSelection(obj ?? null)
@@ -1253,6 +1317,26 @@ export class Engine {
       if (op.sill > 0.01) {
         addBox(start, end - start, 0, op.sill)
       }
+      // видимая панель проёма — её можно выбрать и тянуть
+      const panelW = Math.max(0.02, end - start)
+      const panelH = Math.max(0.02, top - op.sill)
+      const isDoor = op.type === 'door'
+      const panel = new THREE.Mesh(
+        new THREE.BoxGeometry(panelW, panelH, Math.max(0.04, w.thickness * 0.55)),
+        new THREE.MeshStandardMaterial({
+          color: isDoor ? 0x8a6b4a : 0x9ec9e8,
+          roughness: isDoor ? 0.7 : 0.25,
+          metalness: isDoor ? 0.05 : 0.15,
+          transparent: !isDoor,
+          opacity: isDoor ? 1 : 0.75,
+        }),
+      )
+      panel.position.set(op.offset - L / 2, op.sill + panelH / 2, 0)
+      panel.castShadow = true
+      panel.userData.id = w.id
+      panel.userData.openingId = op.id
+      panel.userData.kind = isDoor ? 'opening-door' : 'opening-window'
+      group.add(panel)
       cursor = Math.max(cursor, end)
     }
     if (cursor < L - 0.005) {
@@ -1306,7 +1390,14 @@ export class Engine {
       root.traverse((c) => {
         const mesh = c as THREE.Mesh
         const mat = mesh.material as THREE.MeshStandardMaterial | undefined
-        if (mat && mat.emissive) mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
+        if (!mat || !mat.emissive) return
+        if (mesh.userData.openingId) {
+          if (mesh.userData.openingId === this.selectedOpeningId) {
+            mat.emissive.setHex(0x1a73e8).multiplyScalar(0.45)
+          }
+        } else {
+          mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
+        }
       })
     }
   }
