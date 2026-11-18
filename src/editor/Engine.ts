@@ -44,10 +44,13 @@ export interface RoomVol {
   floor: number
   ceiling: number
   perimeter: number
+  wallsBrutto: number
+  wallsNetto: number
   doors: number
   windows: number
   plinth: number
   wet: boolean
+  height: number
 }
 
 export interface WorkVolumes {
@@ -989,6 +992,7 @@ export class Engine {
       let doors = 0
       let windows = 0
       let doorW = 0
+      let opArea = 0
       for (const w of walls) {
         const L = Math.max(0.01, w.a.distanceTo(w.b))
         const dx = (w.b.x - w.a.x) / L
@@ -1001,20 +1005,28 @@ export class Engine {
           if (op.type === 'door') {
             doors++
             doorW += op.width
+            opArea += op.width * op.height
           } else {
             windows++
+            opArea += op.width * op.height
           }
         }
       }
+      const H = 2.7
+      const wallsBrutto = r1(per * H)
+      const wallsNetto = r1(Math.max(0, wallsBrutto - opArea))
       rooms.push({
         name,
         floor: r1(area),
         ceiling: r1(area),
         perimeter: r1(per),
+        wallsBrutto,
+        wallsNetto,
         doors,
         windows,
         plinth: r1(Math.max(0, per - doorW)),
         wet,
+        height: H,
       })
     })
 

@@ -183,6 +183,53 @@ export default function EditorPage() {
     setFurnHist(engineRef.current?.getFurnHistory() ?? [])
   }
 
+  const exportVolXlsx = async (v: WorkVolumes) => {
+    type Row = (string | number)[]
+    const rows: Row[] = [
+      ['Помещение', 'Показатель', 'Ед. изм.', 'Количество'],
+    ]
+    for (const r of v.rooms) {
+      rows.push([r.name, 'Площадь пола', 'м²', r.floor])
+      rows.push([r.name, 'Площадь стен', 'м²', r.wallsNetto])
+      rows.push([r.name, 'Площадь потолка', 'м²', r.ceiling])
+      rows.push([r.name, 'Периметр', 'м', r.perimeter])
+      rows.push([r.name, 'Плинтус', 'м', r.plinth])
+      rows.push([r.name, 'Двери', 'шт', r.doors])
+      rows.push([r.name, 'Окна', 'шт', r.windows])
+    }
+    rows.push(['ИТОГО', 'Площадь пола', 'м²', v.totals.floor])
+    rows.push(['ИТОГО', 'Площадь стен нетто', 'м²', v.totals.wallsNetto])
+    rows.push(['ИТОГО', 'Площадь стен брутто', 'м²', v.totals.wallsBrutto])
+    rows.push(['ИТОГО', 'Площадь потолка', 'м²', v.totals.ceiling])
+    rows.push(['ИТОГО', 'Плинтус', 'м', v.totals.plinth])
+    rows.push(['ИТОГО', 'Двери', 'шт', v.totals.doors])
+    rows.push(['ИТОГО', 'Окна', 'шт', v.totals.windows])
+    rows.push([])
+    rows.push(['Примечание', 'Стены нетто — за вычетом проёмов. Плинтус — периметр минус двери. Данные из модели PlanUp.', '', ''])
+
+    try {
+      const XLSX = await import('xlsx')
+      const ws = XLSX.utils.aoa_to_sheet(rows)
+      ws['!cols'] = [{ wch: 22 }, { wch: 28 }, { wch: 10 }, { wch: 14 }]
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Объёмы работ')
+      XLSX.writeFile(wb, 'planup-obiemy-rabot.xlsx')
+      flash('Excel сформирован')
+    } catch (err) {
+      // запасной путь: CSV с BOM
+      const csv = rows
+        .map((r) => r.map((c) => (typeof c === 'string' && c.includes(';') ? `"${c}"` : c)).join(';'))
+        .join('\r\n')
+      const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = 'planup-obiemy-rabot.csv'
+      a.click()
+      URL.revokeObjectURL(a.href)
+      flash('Excel недоступен, скачан CSV')
+    }
+  }
+
   const loadPlanFile = async (file: File) => {
     try {
       if (file.type.startsWith('image/')) {
@@ -777,7 +824,15 @@ export default function EditorPage() {
       {vol && (
         <div className="modal" onClick={() => setVol(null)}>
           <div className="modal-card vol" onClick={(e) => e.stopPropagation()}>
-            <h3>Объёмы основных работ</h3>
+            <div className="furn-head">
+              <div>
+                <h3>Объёмы основных работ</h3>
+                <p className="note">Данные из модели в структуре сметы. Стены нетто — за вычетом проёмов.</p>
+              </div>
+              <button className="btn btn-primary sm" onClick={() => void exportVolXlsx(vol)}>
+                Сформировать Excel-файл
+              </button>
+            </div>
             <div className="vol-totals">
               <div>
                 <span>Помещений</span>
@@ -827,6 +882,7 @@ export default function EditorPage() {
                 <tr>
                   <th>Помещение</th>
                   <th>Пол, м²</th>
+                  <th>Стены нетто, м²</th>
                   <th>Потолок, м²</th>
                   <th>Периметр, м</th>
                   <th>Плинтус, м</th>
@@ -840,6 +896,7 @@ export default function EditorPage() {
                   <tr key={r.name}>
                     <td>{r.name}</td>
                     <td>{r.floor.toFixed(2)}</td>
+                    <td>{r.wallsNetto.toFixed(2)}</td>
                     <td>{r.ceiling.toFixed(2)}</td>
                     <td>{r.perimeter.toFixed(2)}</td>
                     <td>{r.plinth.toFixed(2)}</td>
