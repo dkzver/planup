@@ -476,6 +476,23 @@ p { line-height: 1.6; }
   max-height: 88vh;
   overflow-y: auto;
 }
+.modal-card.plan-dlg {
+  max-width: 780px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+.plan-img-wrap {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  margin: 12px 0;
+}
+.plan-img-wrap img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
 .furn-head {
   display: flex;
   justify-content: space-between;

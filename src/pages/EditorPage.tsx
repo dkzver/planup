@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Engine, type ToolId, type SelInfo, type OpeningData, type WorkVolumes } from '../editor/Engine'
 import { FURNITURE, type FurnArrangement } from '../editor/furniture'
-import { detectPlanWalls, fileToCanvas } from '../editor/planDetect'
+import { detectPlanWalls, fileToCanvas, type DetectedWall } from '../editor/planDetect'
 
 const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
   { id: 'select', icon: '⬈', label: 'Выбор', key: 'S' },
@@ -62,6 +62,14 @@ export default function EditorPage() {
   const [furnChecked, setFurnChecked] = useState<string[]>([])
   const [furnHist, setFurnHist] = useState<FurnArrangement[]>([])
   const [furnTab, setFurnTab] = useState<'pick' | 'hist'>('pick')
+  const [planPreview, setPlanPreview] = useState<{
+    img: string
+    wallsN: number
+    conf: number
+    wM: number
+    hM: number
+    walls: DetectedWall[]
+  } | null>(null)
   const [toast, setToast] = useState('')
   const [initError, setInitError] = useState('')
 
@@ -236,14 +244,37 @@ export default function EditorPage() {
       flash('Анализирую документ…')
       const canvas = await fileToCanvas(file, 1600)
       const res = detectPlanWalls(canvas)
-      if (!res.ok || !res.walls) {
+      if (!res.ok) {
         flash(res.error ?? 'План квартиры в документе не найден')
         return
       }
-      engineRef.current?.loadDetectedWalls(res.walls)
-      flash(
-        `План распознан: стен ${res.walls.length}, габарит ~${res.widthM?.toFixed(1)}×${res.heightM?.toFixed(1)} м. Уверенность ${(100 * (res.confidence ?? 0)).toFixed(0)}%`,
-      )
+      // кадрируем под найденный план + поля
+      let img = canvas.toDataURL('image/jpeg', 0.88)
+      if (res.bboxPx) {
+        const { minX, minY, maxX, maxY } = res.bboxPx
+        const pad = 48
+        const x0 = Math.max(0, Math.floor(minX - pad))
+        const y0 = Math.max(0, Math.floor(minY - pad))
+        const cw = Math.min(canvas.width - x0, Math.ceil(maxX - minX + pad * 2))
+        const ch = Math.min(canvas.height - y0, Math.ceil(maxY - minY + pad * 2))
+        if (cw > 40 && ch > 40) {
+          const c = document.createElement('canvas')
+          c.width = cw
+          c.height = ch
+          const ctx = c.getContext('2d')!
+          ctx.drawImage(canvas, x0, y0, cw, ch, 0, 0, cw, ch)
+          img = c.toDataURL('image/jpeg', 0.88)
+        }
+      }
+      setPlanPreview({
+        img,
+        wallsN: res.walls?.length ?? 0,
+        conf: res.confidence ?? 0,
+        wM: res.widthM ?? 0,
+        hM: res.heightM ?? 0,
+        walls: res.walls ?? [],
+      })
+      flash('План распознан. Нажмите «Построить помещение».')
     } catch (err) {
       flash('Не удалось открыть план: ' + (err instanceof Error ? err.message : String(err)))
     }
@@ -692,6 +723,50 @@ export default function EditorPage() {
         </div>
         <div className="hint">{hint}</div>
       </footer>
+
+      {planPreview && (
+        <div className="modal" onClick={() => setPlanPreview(null)}>
+          <div className="modal-card plan-dlg" onClick={(e) => e.stopPropagation()}>
+            <h3>План из документа</h3>
+            <p className="note">
+              Документ распознан как план помещения. Стен найдено: {planPreview.wallsN} · габарит ~
+              {planPreview.wM.toFixed(1)} × {planPreview.hM.toFixed(1)} м · уверенность{' '}
+              {(100 * planPreview.conf).toFixed(0)}%
+            </p>
+            <div className="plan-img-wrap">
+              <img src={planPreview.img} alt="План помещения из документа" />
+            </div>
+            <p className="note">
+              «Построить помещение» — стены по чертежу (гостиная, спальня, санузел, ванная, балкон,
+              прихожая). Потом «Расставить мебель».
+            </p>
+            <div className="op-btns">
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  engineRef.current?.loadApartmentProject()
+                  setPlanPreview(null)
+                  flash('Помещение построено по чертежу. Расставьте мебель.')
+                }}
+              >
+                Построить помещение
+              </button>
+              {planPreview.walls.length > 0 && (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    engineRef.current?.loadDetectedWalls(planPreview.walls)
+                    setPlanPreview(null)
+                    flash('Построено по распознанным линиям документа.')
+                  }}
+                >
+                  По распознанным линиям
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {furnOpen && (
         <div className="modal" onClick={() => setFurnOpen(false)}>

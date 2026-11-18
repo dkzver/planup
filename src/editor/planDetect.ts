@@ -26,6 +26,8 @@ export interface DetectResult {
   widthM?: number
   heightM?: number
   confidence?: number
+  /** габариты в пикселях исходного canvas */
+  bboxPx?: { minX: number; minY: number; maxX: number; maxY: number }
 }
 
 interface Band {
@@ -347,6 +349,7 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
     widthM: bw * mPerPx,
     heightM: bh * mPerPx,
     confidence,
+    bboxPx: { minX, minY, maxX, maxY },
   }
 }
 
