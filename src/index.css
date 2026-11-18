@@ -284,6 +284,49 @@ p { line-height: 1.6; }
   text-align: center;
   padding: 8px 2px;
 }
+.on-axes {
+  background: #e8f1ff;
+}
+.op-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 10px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.op-btns {
+  display: flex;
+  gap: 6px;
+}
+.op-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px;
+  margin-top: 8px;
+  background: #fafbfc;
+}
+.op-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.op-row select {
+  flex: 1;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: 600 13px inherit;
+  background: #fff;
+}
+.ib.sm {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+}
 
 .ed-viewport {
   position: relative;

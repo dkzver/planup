@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Engine, type ToolId, type SelInfo } from '../editor/Engine'
+import { Engine, type ToolId, type SelInfo, type OpeningData } from '../editor/Engine'
 
 const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
   { id: 'select', icon: '⬈', label: 'Выбор', key: 'S' },
@@ -16,11 +16,12 @@ const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
 export default function EditorPage() {
   const hostRef = useRef<HTMLDivElement>(null)
   const engineRef = useRef<Engine | null>(null)
-  const vcbRef = useRef<HTMLInputElement>(null)
 
   const [tool, setTool] = useState<ToolId>('wall')
   const [vcb, setVcb] = useState('')
-  const [hint, setHint] = useState('Кликайте точки — каждая линия станет стеной. Средняя кнопка мыши — орбита.')
+  const [hint, setHint] = useState(
+    'Стены строго по осям. Средняя кнопка мыши — орбита. G — сетка 30 см.',
+  )
   const [sel, setSel] = useState<SelInfo>({ kind: null })
   const [canUndo, setCanUndo] = useState(false)
   const [canRedo, setCanRedo] = useState(false)
@@ -28,6 +29,7 @@ export default function EditorPage() {
   const [wallH, setWallH] = useState(2.7)
   const [wallT, setWallT] = useState(0.1)
   const [color, setColor] = useState('#e8e4d9')
+  const [axes, setAxes] = useState(true)
   const [showHelp, setShowHelp] = useState(false)
   const [toast, setToast] = useState('')
   const [initError, setInitError] = useState('')
@@ -45,12 +47,22 @@ export default function EditorPage() {
         onToolChange: setTool,
         onVcb: setVcb,
         onHint: setHint,
-        onSelection: setSel,
+        onSelection: (info) => {
+          setSel(info)
+          // живая высота/толщина при Push/Pull
+          if (info.kind === 'wall') {
+            if (typeof info.height === 'number') setWallH(info.height)
+            if (typeof info.thickness === 'number') setWallT(info.thickness)
+          } else if (info.kind === 'solid') {
+            if (typeof info.height === 'number') setWallH(info.height)
+          }
+        },
         onHistory: (u, r) => {
           setCanUndo(u)
           setCanRedo(r)
         },
         onObjects: setCount,
+        onAxes: setAxes,
       })
       engineRef.current = eng
       eng.restoreLocal()
@@ -73,16 +85,23 @@ export default function EditorPage() {
   const pickTool = (t: ToolId) => engineRef.current?.setTool(t)
 
   const applyWallH = (v: number) => {
-    setWallH(v)
-    engineRef.current?.setWallHeight(v)
+    const h = Math.max(0.1, Math.round(v * 10) / 10)
+    setWallH(h)
+    engineRef.current?.setWallHeight(h)
   }
   const applyWallT = (v: number) => {
-    setWallT(v)
-    engineRef.current?.setWallThickness(v)
+    const t = Math.max(0.1, Math.round(v * 10) / 10)
+    setWallT(t)
+    engineRef.current?.setWallThickness(t)
   }
   const applyColor = (c: string) => {
     setColor(c)
     engineRef.current?.setWallColor(c)
+  }
+  const toggleAxes = () => {
+    const next = !axes
+    setAxes(next)
+    engineRef.current?.setAxesVisible(next)
   }
 
   const doSave = () => {
@@ -115,7 +134,7 @@ export default function EditorPage() {
 
   const example = () => {
     engineRef.current?.loadExampleRoom()
-    flash('Пример комнаты 4×5 добавлен')
+    flash('Пример комнаты с дверью и окном')
   }
 
   const onVcbKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -125,15 +144,30 @@ export default function EditorPage() {
     }
   }
 
+  const addOp = (type: 'door' | 'window') => {
+    engineRef.current?.addOpening(type)
+    flash(type === 'door' ? 'Дверь добавлена' : 'Окно добавлено')
+  }
+
   if (initError) {
     return (
-      <div style={{ padding: 32, maxWidth: 560, margin: '10vh auto', fontFamily: 'inherit' }}>
+      <div style={{ padding: 32, maxWidth: 560, margin: '10vh auto' }}>
         <h2>Не удалось запустить 3D-вьюпорт</h2>
         <p style={{ color: '#5b6470' }}>
           Редактору нужен WebGL. Откройте PlanUp в Chrome, Edge или Firefox.
           Встроенный предпросмотр и некоторые VM-браузеры WebGL не включают.
         </p>
-        <pre style={{ background: '#f4f1ea', padding: 12, borderRadius: 8, fontSize: 12, overflow: 'auto' }}>{initError}</pre>
+        <pre
+          style={{
+            background: '#f4f1ea',
+            padding: 12,
+            borderRadius: 8,
+            fontSize: 12,
+            overflow: 'auto',
+          }}
+        >
+          {initError}
+        </pre>
         <button className="btn btn-primary" onClick={() => location.assign('/')}>
           На главную
         </button>
@@ -148,13 +182,31 @@ export default function EditorPage() {
           <span className="logo-mark">▲</span> PlanUp
         </Link>
         <div className="ed-actions">
-          <button className="ib" onClick={() => engineRef.current?.undo()} disabled={!canUndo} title="Отменить (Ctrl+Z)">
+          <button
+            className="ib"
+            onClick={() => engineRef.current?.undo()}
+            disabled={!canUndo}
+            title="Отменить (Ctrl+Z)"
+          >
             ↶
           </button>
-          <button className="ib" onClick={() => engineRef.current?.redo()} disabled={!canRedo} title="Вернуть (Ctrl+Shift+Z)">
+          <button
+            className="ib"
+            onClick={() => engineRef.current?.redo()}
+            disabled={!canRedo}
+            title="Вернуть (Ctrl+Shift+Z)"
+          >
             ↷
           </button>
           <span className="sep" />
+          <button
+            className={'ib' + (axes ? ' on-axes' : '')}
+            onClick={toggleAxes}
+            title="Оси 30 см (G)"
+            style={axes ? { borderColor: '#1a73e8', color: '#1a73e8' } : undefined}
+          >
+            # 30
+          </button>
           <button className="ib" onClick={example} title="Пример комнаты 4×5">
             🏠
           </button>
@@ -207,14 +259,14 @@ export default function EditorPage() {
 
         <aside className="ed-side">
           <div className="panel">
-            <h4>Стена</h4>
+            <h4>Стена · кратно 10 см</h4>
             <label className="fld">
               <span>Высота, м</span>
               <input
                 type="number"
                 min={0.1}
                 max={6}
-                step={0.05}
+                step={0.1}
                 value={wallH}
                 onChange={(e) => applyWallH(Number(e.target.value) || 2.7)}
               />
@@ -223,9 +275,9 @@ export default function EditorPage() {
               <span>Толщина, м</span>
               <input
                 type="number"
-                min={0.02}
+                min={0.1}
                 max={1}
-                step={0.01}
+                step={0.1}
                 value={wallT}
                 onChange={(e) => applyWallT(Number(e.target.value) || 0.1)}
               />
@@ -234,51 +286,206 @@ export default function EditorPage() {
               <span>Цвет</span>
               <input type="color" value={color} onChange={(e) => applyColor(e.target.value)} />
             </label>
-            <p className="note">Значения применяются к новым стенам и к выбранной стене.</p>
+            <p className="note">
+              Push/Pull тоже меняет высоту — поле обновляется сразу. Шаг 10 см.
+            </p>
           </div>
 
           <div className="panel">
-            <h4>Свойства выбора</h4>
+            <h4>Выбрано</h4>
             {sel.kind === null && <p className="note">Ничего не выбрано</p>}
             {sel.kind === 'wall' && (
-              <ul className="props">
-                <li>Тип: стена</li>
-                <li>Длина: {sel.length?.toFixed(2)} м</li>
-                <li>Высота: {sel.height?.toFixed(2)} м</li>
-                <li>Толщина: {sel.thickness?.toFixed(2)} м</li>
-              </ul>
+              <>
+                <ul className="props">
+                  <li>
+                    <span>Тип</span>
+                    <b>стена</b>
+                  </li>
+                  <li>
+                    <span>Длина</span>
+                    <b>{sel.length?.toFixed(2)} м</b>
+                  </li>
+                  <li>
+                    <span>Высота</span>
+                    <b>{sel.height?.toFixed(1)} м</b>
+                  </li>
+                  <li>
+                    <span>Толщина</span>
+                    <b>{sel.thickness?.toFixed(1)} м</b>
+                  </li>
+                </ul>
+
+                <div className="op-head">
+                  <span>Проёмы ({sel.openings?.length ?? 0})</span>
+                  <div className="op-btns">
+                    <button className="btn btn-ghost sm" onClick={() => addOp('door')}>
+                      + Дверь
+                    </button>
+                    <button className="btn btn-ghost sm" onClick={() => addOp('window')}>
+                      + Окно
+                    </button>
+                  </div>
+                </div>
+                <p className="note">Дверь 0,9×2,1 · окно 1,2×1,2, подоконник 0,9. Можно несколько.</p>
+                {(sel.openings ?? []).map((op: OpeningData) => (
+                  <div key={op.id} className="op-card">
+                    <div className="op-row">
+                      <select
+                        value={op.type}
+                        onChange={(e) =>
+                          engineRef.current?.updateOpening(op.id, {
+                            type: e.target.value as 'door' | 'window',
+                          })
+                        }
+                      >
+                        <option value="door">Дверь</option>
+                        <option value="window">Окно</option>
+                      </select>
+                      <button
+                        className="ib sm"
+                        title="Удалить проём"
+                        onClick={() => engineRef.current?.removeOpening(op.id)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <label className="fld">
+                      <span>Отступ, м</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={op.offset}
+                        onChange={(e) =>
+                          engineRef.current?.updateOpening(op.id, {
+                            offset: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="fld">
+                      <span>Ширина, м</span>
+                      <input
+                        type="number"
+                        min={0.3}
+                        step={0.1}
+                        value={op.width}
+                        onChange={(e) =>
+                          engineRef.current?.updateOpening(op.id, {
+                            width: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                    <label className="fld">
+                      <span>Высота, м</span>
+                      <input
+                        type="number"
+                        min={0.3}
+                        step={0.1}
+                        value={op.height}
+                        onChange={(e) =>
+                          engineRef.current?.updateOpening(op.id, {
+                            height: Number(e.target.value),
+                          })
+                        }
+                      />
+                    </label>
+                    {op.type === 'window' && (
+                      <label className="fld">
+                        <span>Подоконник, м</span>
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.1}
+                          value={op.sill}
+                          onChange={(e) =>
+                            engineRef.current?.updateOpening(op.id, {
+                              sill: Number(e.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                    )}
+                  </div>
+                ))}
+                <button
+                  className="btn btn-danger sm"
+                  style={{ marginTop: 8 }}
+                  onClick={() => engineRef.current?.deleteSelected()}
+                >
+                  Удалить стену
+                </button>
+              </>
             )}
             {sel.kind === 'solid' && (
-              <ul className="props">
-                <li>Тип: контур / объём</li>
-                <li>Высота: {sel.height?.toFixed(2)} м</li>
-                <li>Площадь: {sel.area?.toFixed(2)} м²</li>
-              </ul>
-            )}
-            {sel.kind && (
-              <button className="btn btn-danger sm" onClick={() => engineRef.current?.deleteSelected()}>
-                Удалить
-              </button>
+              <>
+                <ul className="props">
+                  <li>
+                    <span>Тип</span>
+                    <b>контур / объём</b>
+                  </li>
+                  <li>
+                    <span>Высота</span>
+                    <b>{sel.height?.toFixed(1)} м</b>
+                  </li>
+                  <li>
+                    <span>Площадь</span>
+                    <b>{sel.area?.toFixed(2)} м²</b>
+                  </li>
+                </ul>
+                <button className="btn btn-danger sm" onClick={() => engineRef.current?.deleteSelected()}>
+                  Удалить
+                </button>
+              </>
             )}
           </div>
 
           <div className="panel">
             <h4>Горячие клавиши</h4>
             <ul className="keys">
-              <li><b>W</b> стена</li>
-              <li><b>L</b> линия</li>
-              <li><b>R</b> прямоугольник</li>
-              <li><b>P</b> Push/Pull</li>
-              <li><b>S</b> выбор</li>
-              <li><b>M</b> переместить</li>
-              <li><b>E</b> ластик</li>
-              <li><b>O</b> орбита</li>
-              <li><b>СКМ</b> орбита</li>
-              <li><b>ПКМ</b> панорама</li>
-              <li><b>Esc</b> отмена</li>
-              <li><b>Enter</b> замкнуть / применить VCB</li>
-              <li><b>Del</b> удалить</li>
-              <li><b>Ctrl+Z</b> отмена</li>
+              <li>
+                <b>W</b> стена
+              </li>
+              <li>
+                <b>L</b> линия
+              </li>
+              <li>
+                <b>R</b> прямоугольник
+              </li>
+              <li>
+                <b>P</b> Push/Pull
+              </li>
+              <li>
+                <b>S</b> выбор
+              </li>
+              <li>
+                <b>M</b> переместить
+              </li>
+              <li>
+                <b>E</b> ластик
+              </li>
+              <li>
+                <b>O</b> орбита
+              </li>
+              <li>
+                <b>G</b> оси 30 см
+              </li>
+              <li>
+                <b>СКМ</b> орбита
+              </li>
+              <li>
+                <b>ПКМ</b> панорама
+              </li>
+              <li>
+                <b>Esc</b> отмена
+              </li>
+              <li>
+                <b>Enter</b> замкнуть / VCB
+              </li>
+              <li>
+                <b>Del</b> удалить
+              </li>
             </ul>
           </div>
         </aside>
@@ -287,13 +494,7 @@ export default function EditorPage() {
       <footer className="ed-bottom">
         <div className="vcb">
           <span>Размер</span>
-          <input
-            ref={vcbRef}
-            value={vcb}
-            onChange={(e) => setVcb(e.target.value)}
-            onKeyDown={onVcbKey}
-            placeholder="2.50"
-          />
+          <input value={vcb} onChange={(e) => setVcb(e.target.value)} onKeyDown={onVcbKey} placeholder="2.50" />
         </div>
         <div className="hint">{hint}</div>
       </footer>
@@ -303,12 +504,26 @@ export default function EditorPage() {
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
             <h3>Как рисовать помещение</h3>
             <ol>
-              <li>Инструмент <b>Стена</b>: кликайте углы комнаты. Замкните контур кликом по первой точке.</li>
-              <li>Высоту и толщину стен меняйте справа — можно до рисования, можно на выбранной стене.</li>
-              <li><b>Линия / Прямоугольник</b> — контур пола. Потом <b>Push/Pull</b> — выдавить.</li>
-              <li>Во время рисования введите число в поле «Размер» и нажмите Enter — отрезок станет точным.</li>
+              <li>
+                <b>Стена</b>: только горизонтально и вертикально. Кликайте углы, замкните на первую
+                точку.
+              </li>
+              <li>
+                Высота и толщина — кратно 10 см. Push/Pull по стене тоже меняет высоту, поле справа
+                обновляется сразу.
+              </li>
+              <li>
+                Выберите стену → <b>+ Дверь</b> / <b>+ Окно</b>. Несколько проёмов на одной стене,
+                размеры и подоконник редактируются.
+              </li>
+              <li>
+                <b>Оси 30 см</b> (кнопка # 30 или G) — сетка и привязка к горизонтальным/вертикальным
+                линиям с шагом 30 см. Можно скрывать.
+              </li>
+              <li>
+                <b>Линия</b> — тоже только по осям. Замкнули контур — Push/Pull в объём.
+              </li>
               <li>Средняя кнопка мыши — орбита, правая — панорама, колесо — зум.</li>
-              <li>Кнопка 🏠 добавит пример комнаты 4×5 м с дверным проёмом.</li>
             </ol>
             <button className="btn btn-primary" onClick={() => setShowHelp(false)}>
               Понятно

@@ -11,6 +11,17 @@ export type ToolId =
   | 'erase'
   | 'orbit'
 
+export interface OpeningData {
+  id: string
+  type: 'door' | 'window'
+  /** отступ центра проёма от начала стены, м */
+  offset: number
+  width: number
+  height: number
+  /** подоконник, м от пола; у двери 0 */
+  sill: number
+}
+
 export interface SelInfo {
   kind: 'wall' | 'solid' | null
   id?: string
@@ -18,6 +29,7 @@ export interface SelInfo {
   height?: number
   thickness?: number
   area?: number
+  openings?: OpeningData[]
 }
 
 export interface EditorCallbacks {
@@ -27,6 +39,7 @@ export interface EditorCallbacks {
   onSelection?: (info: SelInfo) => void
   onHistory?: (canUndo: boolean, canRedo: boolean) => void
   onObjects?: (n: number) => void
+  onAxes?: (visible: boolean) => void
 }
 
 export interface WallData {
@@ -37,6 +50,7 @@ export interface WallData {
   height: number
   thickness: number
   color: string
+  openings: OpeningData[]
 }
 
 export interface SolidData {
@@ -49,21 +63,31 @@ export interface SolidData {
 
 export type DocObj = WallData | SolidData
 
-const GRID = 0.1
+const GRID_FINE = 0.1
+const GRID_AXES = 0.3
 const VERTEX_SNAP = 0.25
 const DEFAULT_WALL_H = 2.7
 const DEFAULT_WALL_T = 0.1
+const MIN_T = 0.1
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10)
 }
 
+export function round01(v: number): number {
+  return Math.round(v * 10) / 10
+}
+
+export function round03(v: number): number {
+  return Math.round(v / GRID_AXES) * GRID_AXES
+}
+
 const HINTS: Record<ToolId, string> = {
-  select: 'Кликните объект. Del — удалить. Перетаскивание инструментом «Переместить».',
-  line: 'Кликните точки контура. Клик по первой точке или Enter — замкнуть в плоскость. Esc — отмена.',
-  rect: 'Два клика: первый угол, второй — противоположный. В поле «Размер» можно ввести «4, 5».',
-  wall: 'Кликайте углы. Каждая линия — стена. Enter / Esc — закончить цепочку.',
-  pushpull: 'Кликните плоскость или стену и тяните мышь вверх/вниз. Введите высоту в «Размер».',
+  select: 'Кликните стену. Справа — проёмы. Del — удалить.',
+  line: 'Только по осям: горизонталь и вертикаль. Клик по первой точке или Enter — замкнуть.',
+  rect: 'Два клика: первый угол, второй — противоположный. В «Размере» можно ввести «4, 5».',
+  wall: 'Стены строго ортогональны. Кликайте углы. Enter / Esc — закончить.',
+  pushpull: 'Кликните стену или плоскость и тяните мышь. Высота — кратно 10 см.',
   move: 'Тяните выбранный объект по полу.',
   erase: 'Кликните объект, чтобы удалить.',
   orbit: 'Левая кнопка — орбита. Колесо — зум. Правая — панорама.',
@@ -87,9 +111,10 @@ export class Engine {
   wallHeight = DEFAULT_WALL_H
   wallThickness = DEFAULT_WALL_T
   wallColor = '#e8e4d9'
+  axesVisible = true
 
   private objects: DocObj[] = []
-  private idToMesh = new Map<string, THREE.Mesh>()
+  private idToObj = new Map<string, THREE.Object3D>()
   private selectedId: string | null = null
   private undoStack: DocObj[][] = []
   private redoStack: DocObj[][] = []
@@ -103,6 +128,8 @@ export class Engine {
   private snapMarker: THREE.Mesh
   private axisLineX: THREE.Line
   private axisLineZ: THREE.Line
+  private grid1m: THREE.GridHelper
+  private grid30: THREE.GridHelper
 
   constructor(container: HTMLElement, cb: EditorCallbacks = {}) {
     this.container = container
@@ -162,17 +189,19 @@ export class Engine {
     this.ground.name = 'ground'
     this.scene.add(this.ground)
 
-    const grid = new THREE.GridHelper(80, 80, 0xb8c4d4, 0xd5dde8)
-    const gm = grid.material as THREE.Material
+    this.grid1m = new THREE.GridHelper(80, 80, 0xb8c4d4, 0xd5dde8)
+    const gm = this.grid1m.material as THREE.Material
     gm.transparent = true
-    gm.opacity = 0.7
-    this.scene.add(grid)
+    gm.opacity = 0.55
+    this.scene.add(this.grid1m)
 
-    const gridFine = new THREE.GridHelper(8, 80, 0xc9d4e3, 0xe6edf5)
-    const gfm = gridFine.material as THREE.Material
-    gfm.transparent = true
-    gfm.opacity = 0.4
-    this.scene.add(gridFine)
+    // оси с шагом 30 см
+    this.grid30 = new THREE.GridHelper(60, 200, 0x7aa7e8, 0xa9c6ef)
+    const g30 = this.grid30.material as THREE.Material
+    g30.transparent = true
+    g30.opacity = 0.55
+    this.grid30.position.y = 0.001
+    this.scene.add(this.grid30)
 
     const axes = new THREE.AxesHelper(2)
     axes.position.y = 0.002
@@ -204,6 +233,7 @@ export class Engine {
     this.ro = new ResizeObserver(() => this.resize())
     this.ro.observe(container)
     this.setTool('wall')
+    this.setAxesVisible(true)
     this.loop()
   }
 
@@ -224,23 +254,32 @@ export class Engine {
     this.renderer.domElement.style.cursor = t === 'select' ? 'default' : 'crosshair'
   }
 
+  setAxesVisible(v: boolean) {
+    this.axesVisible = v
+    this.grid30.visible = v
+    this.cb.onAxes?.(v)
+  }
+
   setWallHeight(v: number) {
-    this.wallHeight = THREE.MathUtils.clamp(v, 0.1, 8)
+    this.wallHeight = Math.max(0.1, round01(v))
     const sel = this.getSelected()
     if (sel) {
       sel.height = this.wallHeight
+      if (sel.kind === 'wall') this.clampOpenings(sel)
       this.rebuild(sel.id)
       this.historyPush()
+      this.emitSelection(sel)
     }
   }
 
   setWallThickness(v: number) {
-    this.wallThickness = THREE.MathUtils.clamp(v, 0.02, 2)
+    this.wallThickness = Math.max(MIN_T, round01(v))
     const sel = this.getSelected()
     if (sel && sel.kind === 'wall') {
       sel.thickness = this.wallThickness
       this.rebuild(sel.id)
       this.historyPush()
+      this.emitSelection(sel)
     }
   }
 
@@ -263,15 +302,103 @@ export class Engine {
     if (!this.selectedId) return
     this.historyPush()
     const id = this.selectedId
-    const mesh = this.idToMesh.get(id)
-    if (mesh) {
-      this.scene.remove(mesh)
-      this.disposeObj(mesh)
-      this.idToMesh.delete(id)
+    const obj = this.idToObj.get(id)
+    if (obj) {
+      this.scene.remove(obj)
+      this.disposeObj(obj)
+      this.idToObj.delete(id)
     }
     this.objects = this.objects.filter((o) => o.id !== id)
     this.select(null)
     this.emitCount()
+  }
+
+  addOpening(type: 'door' | 'window') {
+    const sel = this.getSelected()
+    if (!sel || sel.kind !== 'wall') return
+    this.historyPush()
+    const L = sel.a.distanceTo(sel.b)
+    const isDoor = type === 'door'
+    const width = Math.min(isDoor ? 0.9 : 1.2, Math.max(0.3, round01(L * 0.4)))
+    const height = isDoor
+      ? Math.min(2.1, sel.height)
+      : Math.min(1.4, Math.max(0.3, sel.height - 0.9))
+    const sill = isDoor ? 0 : Math.min(0.9, Math.max(0, sel.height - height))
+    // расставляем по стене
+    const n = sel.openings.length
+    const offset = round01(Math.min(L - width / 2, Math.max(width / 2, (L * (n + 1)) / (n + 2))))
+    const op: OpeningData = {
+      id: uid(),
+      type,
+      offset: round01(offset),
+      width: round01(width),
+      height: round01(height),
+      sill: round01(sill),
+    }
+    sel.openings.push(op)
+    this.clampOpenings(sel)
+    this.rebuild(sel.id)
+    this.emitSelection(sel)
+  }
+
+  updateOpening(opId: string, patch: Partial<OpeningData>) {
+    const sel = this.getSelected()
+    if (!sel || sel.kind !== 'wall') return
+    const op = sel.openings.find((o) => o.id === opId)
+    if (!op) return
+    if (patch.type !== undefined) {
+      op.type = patch.type
+      if (patch.type === 'door') {
+        op.sill = 0
+        if (op.height < 1.8) op.height = 2.1
+      } else if (op.sill === 0) {
+        op.sill = 0.9
+      }
+    }
+    if (patch.offset !== undefined) op.offset = Math.max(0, round01(patch.offset))
+    if (patch.width !== undefined) op.width = Math.max(0.3, round01(patch.width))
+    if (patch.height !== undefined) op.height = Math.max(0.3, round01(patch.height))
+    if (patch.sill !== undefined) op.sill = Math.max(0, round01(patch.sill))
+    if (op.type === 'door') op.sill = 0
+    this.clampOpenings(sel)
+    this.rebuild(sel.id)
+    this.emitSelection(sel)
+    this.saveLocal()
+  }
+
+  removeOpening(opId: string) {
+    const sel = this.getSelected()
+    if (!sel || sel.kind !== 'wall') return
+    this.historyPush()
+    sel.openings = sel.openings.filter((o) => o.id !== opId)
+    this.rebuild(sel.id)
+    this.emitSelection(sel)
+  }
+
+  private clampOpenings(w: WallData) {
+    const L = w.a.distanceTo(w.b)
+    w.height = round01(w.height)
+    w.thickness = Math.max(MIN_T, round01(w.thickness))
+    for (const op of w.openings) {
+      op.width = Math.max(0.3, Math.min(round01(op.width), round01(L)))
+      op.height = Math.max(0.3, round01(op.height))
+      op.sill = Math.max(0, round01(op.sill))
+      if (op.type === 'door') op.sill = 0
+      if (op.sill + op.height > w.height) {
+        // прижимаем к верху, сохраняя высоту если можно
+        if (op.height <= w.height) op.sill = round01(w.height - op.height)
+        else {
+          op.height = round01(w.height - op.sill)
+          if (op.height < 0.3) {
+            op.height = round01(w.height)
+            op.sill = 0
+          }
+        }
+      }
+      op.offset = Math.max(op.width / 2, Math.min(round01(op.offset), round01(L - op.width / 2)))
+    }
+    // сортировка по отступу
+    w.openings.sort((x, y) => x.offset - y.offset)
   }
 
   undo() {
@@ -296,9 +423,17 @@ export class Engine {
     const text = raw.trim().replace(',', '.')
     if (!text) return
     const parts = text.split(/[\s;]+/).filter(Boolean).map(Number)
-    if (this.tool === 'rect' && this.draftPts.length === 1 && parts.length >= 2 && isFinite(parts[0]) && isFinite(parts[1])) {
+    if (
+      this.tool === 'rect' &&
+      this.draftPts.length === 1 &&
+      parts.length >= 2 &&
+      isFinite(parts[0]) &&
+      isFinite(parts[1])
+    ) {
       const a = this.draftPts[0]
-      this.draftPts.push(new THREE.Vector3(a.x + parts[0], 0, a.z + parts[1]))
+      this.draftPts.push(
+        new THREE.Vector3(a.x + round03(parts[0]), 0, a.z + round03(parts[1])),
+      )
       this.finishRect()
       return
     }
@@ -308,7 +443,12 @@ export class Engine {
     if ((this.tool === 'wall' || this.tool === 'line') && this.draftPts.length >= 1) {
       const from = this.draftPts[this.draftPts.length - 1]
       const dir = this.lastDir ?? new THREE.Vector3(1, 0, 0)
-      const to = from.clone().add(dir.clone().setLength(n))
+      // ортогонально: доминирующая ось
+      const ax = Math.abs(dir.x) >= Math.abs(dir.z) ? 'x' : 'z'
+      const to =
+        ax === 'x'
+          ? new THREE.Vector3(from.x + round03(dir.x >= 0 ? n : -n), 0, from.z)
+          : new THREE.Vector3(from.x, 0, from.z + round03(dir.z >= 0 ? n : -n))
       if (this.tool === 'wall') {
         this.commitWall(from, to)
         this.draftPts = [to]
@@ -321,15 +461,17 @@ export class Engine {
       return
     }
     if (this.tool === 'pushpull' && this.pushObj) {
-      this.previewPushPull(n)
+      this.previewPushPull(round01(n))
       this.finishPushPull()
       return
     }
     const sel = this.getSelected()
     if (sel) {
-      sel.height = n
+      sel.height = round01(n)
+      if (sel.kind === 'wall') this.clampOpenings(sel)
       this.rebuild(sel.id)
       this.historyPush()
+      this.emitSelection(sel)
     }
   }
 
@@ -340,34 +482,37 @@ export class Engine {
       kind: 'solid',
       id: uid(),
       points: [
-        { x: -2, z: -2.5 },
-        { x: 2, z: -2.5 },
-        { x: 2, z: 2.5 },
-        { x: -2, z: 2.5 },
+        { x: -2.1, z: -2.4 },
+        { x: 2.1, z: -2.4 },
+        { x: 2.1, z: 2.4 },
+        { x: -2.1, z: 2.4 },
       ],
-      height: 0.08,
+      height: 0.1,
       color: '#c8b89a',
     }
     this.objects.push(floor)
     this.rebuild(floor.id)
 
-    const segs: [number, number, number, number][] = [
-      [-2, -2.5, 2, -2.5],
-      [2, -2.5, 2, 2.5],
-      [2, 2.5, 0.6, 2.5],
-      [-0.6, 2.5, -2, 2.5],
-      [-2, 2.5, -2, -2.5],
+    const mk = (x1: number, z1: number, x2: number, z2: number, ops: OpeningData[] = []): WallData => ({
+      kind: 'wall',
+      id: uid(),
+      a: new THREE.Vector3(x1, 0, z1),
+      b: new THREE.Vector3(x2, 0, z2),
+      height: 2.7,
+      thickness: 0.1,
+      color: '#e8e4d9',
+      openings: ops,
+    })
+    const door: OpeningData = { id: uid(), type: 'door', offset: 0.9, width: 0.9, height: 2.1, sill: 0 }
+    const win: OpeningData = { id: uid(), type: 'window', offset: 1.5, width: 1.2, height: 1.2, sill: 0.9 }
+    const walls = [
+      mk(-2.1, -2.4, 2.1, -2.4, [win]),
+      mk(2.1, -2.4, 2.1, 2.4),
+      mk(2.1, 2.4, 0.3, 2.4, [door]),
+      mk(-0.6, 2.4, -2.1, 2.4),
+      mk(-2.1, 2.4, -2.1, -2.4),
     ]
-    for (const [x1, z1, x2, z2] of segs) {
-      const w: WallData = {
-        kind: 'wall',
-        id: uid(),
-        a: new THREE.Vector3(x1, 0, z1),
-        b: new THREE.Vector3(x2, 0, z2),
-        height: 2.7,
-        thickness: 0.12,
-        color: '#e8e4d9',
-      }
+    for (const w of walls) {
       this.objects.push(w)
       this.rebuild(w.id)
     }
@@ -378,13 +523,19 @@ export class Engine {
   serialize(): string {
     return JSON.stringify(
       {
-        version: 1,
+        version: 2,
         wallHeight: this.wallHeight,
         wallThickness: this.wallThickness,
         wallColor: this.wallColor,
+        axesVisible: this.axesVisible,
         objects: this.objects.map((o) =>
           o.kind === 'wall'
-            ? { ...o, a: o.a.toArray(), b: o.b.toArray() }
+            ? {
+                ...o,
+                a: o.a.toArray(),
+                b: o.b.toArray(),
+                openings: o.openings.map((op) => ({ ...op })),
+              }
             : { ...o, points: o.points.map((p) => ({ ...p })) },
         ),
       },
@@ -408,7 +559,9 @@ export class Engine {
             height: raw.height ?? DEFAULT_WALL_H,
             thickness: raw.thickness ?? DEFAULT_WALL_T,
             color: raw.color ?? this.wallColor,
+            openings: Array.isArray(raw.openings) ? raw.openings : [],
           }
+          this.clampOpenings(w)
           this.objects.push(w)
           this.rebuild(w.id)
         } else if (Array.isArray(raw.points) && raw.points.length >= 3) {
@@ -416,16 +569,17 @@ export class Engine {
             kind: 'solid',
             id: raw.id ?? uid(),
             points: raw.points,
-            height: raw.height ?? 0.05,
+            height: raw.height ?? 0.1,
             color: raw.color ?? '#dbe4ee',
           }
           this.objects.push(s)
           this.rebuild(s.id)
         }
       }
-      if (typeof data.wallHeight === 'number') this.wallHeight = data.wallHeight
-      if (typeof data.wallThickness === 'number') this.wallThickness = data.wallThickness
+      if (typeof data.wallHeight === 'number') this.wallHeight = round01(data.wallHeight)
+      if (typeof data.wallThickness === 'number') this.wallThickness = round01(data.wallThickness)
       if (typeof data.wallColor === 'string') this.wallColor = data.wallColor
+      if (typeof data.axesVisible === 'boolean') this.setAxesVisible(data.axesVisible)
       this.undoStack = []
       this.redoStack = []
       this.emitHistory()
@@ -453,7 +607,7 @@ export class Engine {
       return
     }
     const box = new THREE.Box3()
-    for (const m of this.idToMesh.values()) box.expandByObject(m)
+    for (const m of this.idToObj.values()) box.expandByObject(m)
     if (box.isEmpty()) return
     const center = box.getCenter(new THREE.Vector3())
     const size = box.getSize(new THREE.Vector3()).length() || 5
@@ -479,8 +633,8 @@ export class Engine {
     this.ro?.disconnect()
     this.controls.dispose()
     this.unbindEvents()
-    for (const m of this.idToMesh.values()) this.disposeObj(m)
-    this.idToMesh.clear()
+    for (const m of this.idToObj.values()) this.disposeObj(m)
+    this.idToObj.clear()
     this.renderer.dispose()
     this.renderer.domElement.remove()
   }
@@ -490,17 +644,17 @@ export class Engine {
   private cloneObjs(): DocObj[] {
     return this.objects.map((o) =>
       o.kind === 'wall'
-        ? { ...o, a: o.a.clone(), b: o.b.clone() }
+        ? { ...o, a: o.a.clone(), b: o.b.clone(), openings: o.openings.map((op) => ({ ...op })) }
         : { ...o, points: o.points.map((p) => ({ ...p })) },
     )
   }
 
   private restoreObjs(objs: DocObj[]) {
-    for (const m of this.idToMesh.values()) {
+    for (const m of this.idToObj.values()) {
       this.scene.remove(m)
       this.disposeObj(m)
     }
-    this.idToMesh.clear()
+    this.idToObj.clear()
     this.objects = objs
     for (const o of objs) this.rebuild(o.id)
     this.select(null)
@@ -524,6 +678,30 @@ export class Engine {
     this.cb.onObjects?.(this.objects.length)
   }
 
+  private emitSelection(obj?: DocObj | null) {
+    if (!obj || this.selectedId !== obj.id) {
+      if (!obj) this.cb.onSelection?.({ kind: null })
+      return
+    }
+    if (obj.kind === 'wall') {
+      this.cb.onSelection?.({
+        kind: 'wall',
+        id: obj.id,
+        length: obj.a.distanceTo(obj.b),
+        height: obj.height,
+        thickness: obj.thickness,
+        openings: obj.openings.map((o) => ({ ...o })),
+      })
+    } else {
+      this.cb.onSelection?.({
+        kind: 'solid',
+        id: obj.id,
+        height: obj.height,
+        area: Math.abs(this.polygonArea(obj.points)),
+      })
+    }
+  }
+
   private saveLocal() {
     try {
       localStorage.setItem('planup.doc', this.serialize())
@@ -533,11 +711,11 @@ export class Engine {
   }
 
   private clearDocQuiet() {
-    for (const m of this.idToMesh.values()) {
+    for (const m of this.idToObj.values()) {
       this.scene.remove(m)
       this.disposeObj(m)
     }
-    this.idToMesh.clear()
+    this.idToObj.clear()
     this.objects = []
     this.select(null)
   }
@@ -590,6 +768,10 @@ export class Engine {
       if (e.shiftKey) this.redo()
       else this.undo()
     } else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key.toLowerCase() === 'g') {
+        this.setAxesVisible(!this.axesVisible)
+        return
+      }
       const map: Record<string, ToolId> = {
         s: 'select', л: 'select',
         l: 'line', д: 'line',
@@ -619,16 +801,34 @@ export class Engine {
     return hits.length ? hits[0].point.clone() : null
   }
 
-  private pickObject(): THREE.Mesh | null {
+  private pickObject(): THREE.Object3D | null {
     this.raycaster.setFromCamera(this.pointer, this.camera)
-    const hits = this.raycaster.intersectObjects([...this.idToMesh.values()], false)
-    return hits.length ? (hits[0].object as THREE.Mesh) : null
+    const roots = [...this.idToObj.values()]
+    const hits = this.raycaster.intersectObjects(roots, true)
+    if (!hits.length) return null
+    let o: THREE.Object3D | null = hits[0].object
+    while (o && !o.userData.id) o = o.parent
+    return o ?? hits[0].object
+  }
+
+  private quantPlan(v: number): number {
+    return this.axesVisible ? round03(v) : Math.round(v / GRID_FINE) * GRID_FINE
+  }
+
+  /** ортогональный луч от from к сырому курсору */
+  private ortho(from: THREE.Vector3, raw: THREE.Vector3): { p: THREE.Vector3; axis: 'x' | 'z' } {
+    const dx = raw.x - from.x
+    const dz = raw.z - from.z
+    if (Math.abs(dx) >= Math.abs(dz)) {
+      return { p: new THREE.Vector3(this.quantPlan(raw.x), 0, from.z), axis: 'x' }
+    }
+    return { p: new THREE.Vector3(from.x, 0, this.quantPlan(raw.z)), axis: 'z' }
   }
 
   private snap(raw: THREE.Vector3): { p: THREE.Vector3; axis: 'x' | 'z' | null } {
     const p = raw.clone()
-    p.x = Math.round(p.x / GRID) * GRID
-    p.z = Math.round(p.z / GRID) * GRID
+    p.x = this.quantPlan(p.x)
+    p.z = this.quantPlan(p.z)
     p.y = 0
 
     let best: THREE.Vector3 | null = null
@@ -647,16 +847,9 @@ export class Engine {
 
     if (this.draftPts.length > 0) {
       const last = this.draftPts[this.draftPts.length - 1]
-      const dx = Math.abs(p.x - last.x)
-      const dz = Math.abs(p.z - last.z)
-      if (dx <= dz && dx < 0.18) {
-        p.x = last.x
-        return { p, axis: 'z' }
-      }
-      if (dz < dx && dz < 0.18) {
-        p.z = last.z
-        return { p, axis: 'x' }
-      }
+      // строго ортогонально
+      const o = this.ortho(last, p)
+      return { p: o.p, axis: o.axis }
     }
     return { p, axis: null }
   }
@@ -668,12 +861,12 @@ export class Engine {
     if (t === 'orbit') return
 
     if (t === 'select' || t === 'erase') {
-      const mesh = this.pickObject()
-      if (!mesh) {
+      const obj = this.pickObject()
+      if (!obj) {
         this.select(null)
         return
       }
-      const id = mesh.userData.id as string
+      const id = obj.userData.id as string
       if (t === 'erase') {
         this.selectedId = id
         this.deleteSelected()
@@ -684,12 +877,12 @@ export class Engine {
     }
 
     if (t === 'move') {
-      const mesh = this.pickObject()
-      if (!mesh) {
+      const obj = this.pickObject()
+      if (!obj) {
         this.select(null)
         return
       }
-      this.select(mesh.userData.id as string)
+      this.select(obj.userData.id as string)
       const p = this.pickGround()
       if (p) this.moveLast = p
       return
@@ -741,14 +934,14 @@ export class Engine {
     }
 
     if (t === 'pushpull') {
-      const mesh = this.pickObject()
-      if (!mesh) return
-      const obj = this.objects.find((o) => o.id === mesh.userData.id)
+      const obj = this.pickObject()
       if (!obj) return
-      this.select(obj.id)
-      this.pushObj = obj
-      this.pushH = obj.height
-      this.cb.onHint?.('Тяните мышь вверх/вниз. Клик — зафиксировать. «Размер» + Enter — точная высота.')
+      const doc = this.objects.find((o) => o.id === obj.userData.id)
+      if (!doc) return
+      this.select(doc.id)
+      this.pushObj = doc
+      this.pushH = doc.height
+      this.cb.onHint?.('Тяните мышь вверх/вниз. Высота кратно 10 см. Клик — зафиксировать.')
     }
   }
 
@@ -771,10 +964,10 @@ export class Engine {
     }
 
     if (t === 'pushpull' && this.pushObj && e.buttons & 1) {
-      const h = THREE.MathUtils.clamp(this.pushH - e.movementY * 0.015, 0.02, 8)
-      this.pushH = h
+      const rawH = this.pushH - e.movementY * 0.015
+      const h = Math.max(0.1, round01(rawH))
       this.previewPushPull(h)
-      this.cb.onVcb?.(h.toFixed(2))
+      this.cb.onVcb?.(h.toFixed(1) + ' м')
       return
     }
 
@@ -783,33 +976,43 @@ export class Engine {
       if (!raw) return
       const obj = this.getSelected()
       if (!obj) return
-      const dx = Math.round((raw.x - this.moveLast.x) / GRID) * GRID
-      const dz = Math.round((raw.z - this.moveLast.z) / GRID) * GRID
+      const dx = this.quantPlan(raw.x) - this.quantPlan(this.moveLast.x)
+      const dz = this.quantPlan(raw.z) - this.quantPlan(this.moveLast.z)
       if (Math.abs(dx) < 1e-9 && Math.abs(dz) < 1e-9) return
       if (obj.kind === 'wall') {
-        obj.a.x += dx
-        obj.a.z += dz
-        obj.b.x += dx
-        obj.b.z += dz
+        // двигаем только по одной оси — сохраняем ортогональность
+        if (Math.abs(dx) >= Math.abs(dz)) {
+          this.translateWall(obj, dx, 0)
+        } else {
+          this.translateWall(obj, 0, dz)
+        }
       } else {
         for (const p of obj.points) {
           p.x += dx
           p.z += dz
         }
+        this.rebuild(obj.id)
       }
-      this.rebuild(obj.id)
       this.moveLast = raw
       return
     }
 
     if (t === 'select' || t === 'erase' || t === 'pushpull') {
-      const mesh = this.pickObject()
-      this.renderer.domElement.style.cursor = mesh
+      const obj = this.pickObject()
+      this.renderer.domElement.style.cursor = obj
         ? 'pointer'
         : t === 'select'
           ? 'default'
           : 'crosshair'
     }
+  }
+
+  private translateWall(w: WallData, dx: number, dz: number) {
+    w.a.x += dx
+    w.a.z += dz
+    w.b.x += dx
+    w.b.z += dz
+    this.rebuild(w.id)
   }
 
   private onPointerUp = () => {
@@ -844,7 +1047,7 @@ export class Engine {
   private updateDraft(hover?: THREE.Vector3) {
     if (this.draftMesh) {
       this.scene.remove(this.draftMesh)
-      this.disposeObj(this.draftMesh as THREE.Mesh)
+      this.disposeObj(this.draftMesh)
       this.draftMesh = null
     }
     const pts = [...this.draftPts]
@@ -885,7 +1088,7 @@ export class Engine {
           kind: 'solid',
           id: uid(),
           points: pts,
-          height: 0.02,
+          height: 0.1,
           color: '#dbe4ee',
         }
         this.objects.push(s)
@@ -916,7 +1119,7 @@ export class Engine {
       kind: 'solid',
       id: uid(),
       points: pts,
-      height: 0.02,
+      height: 0.1,
       color: '#dbe4ee',
     }
     this.objects.push(s)
@@ -937,6 +1140,7 @@ export class Engine {
       height: this.wallHeight,
       thickness: this.wallThickness,
       color: this.wallColor,
+      openings: [],
     }
     this.objects.push(w)
     this.rebuild(w.id)
@@ -948,7 +1152,7 @@ export class Engine {
     this.pushObj = null
     if (this.draftMesh) {
       this.scene.remove(this.draftMesh)
-      this.disposeObj(this.draftMesh as THREE.Mesh)
+      this.disposeObj(this.draftMesh)
       this.draftMesh = null
     }
     this.hideSnap()
@@ -957,21 +1161,27 @@ export class Engine {
 
   private previewPushPull(h: number) {
     if (!this.pushObj) return
-    this.pushObj.height = h
+    this.pushObj.height = round01(h)
+    if (this.pushObj.kind === 'wall') this.clampOpenings(this.pushObj)
     this.rebuild(this.pushObj.id)
+    this.emitSelection(this.pushObj)
   }
 
   private finishPushPull() {
     if (!this.pushObj) return
     this.historyPush()
+    this.emitSelection(this.pushObj)
     this.pushObj = null
-    this.cb.onHint?.('Высота применена.')
+    this.cb.onHint?.('Высота применена. Панель справа обновлена.')
   }
 
   private select(id: string | null) {
-    for (const m of this.idToMesh.values()) {
-      const mat = m.material as THREE.MeshStandardMaterial
-      if (mat.emissive) mat.emissive.setHex(0x000000)
+    for (const m of this.idToObj.values()) {
+      m.traverse((c) => {
+        const mesh = c as THREE.Mesh
+        const mat = mesh.material as THREE.MeshStandardMaterial | undefined
+        if (mat && mat.emissive) mat.emissive.setHex(0x000000)
+      })
     }
     this.selectedId = id
     if (!id) {
@@ -979,28 +1189,15 @@ export class Engine {
       return
     }
     const obj = this.objects.find((o) => o.id === id)
-    const mesh = this.idToMesh.get(id)
-    if (mesh) {
-      const mat = mesh.material as THREE.MeshStandardMaterial
-      if (mat.emissive) mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
-    }
-    if (!obj) return
-    if (obj.kind === 'wall') {
-      this.cb.onSelection?.({
-        kind: 'wall',
-        id,
-        length: obj.a.distanceTo(obj.b),
-        height: obj.height,
-        thickness: obj.thickness,
-      })
-    } else {
-      this.cb.onSelection?.({
-        kind: 'solid',
-        id,
-        height: obj.height,
-        area: Math.abs(this.polygonArea(obj.points)),
+    const root = this.idToObj.get(id)
+    if (root) {
+      root.traverse((c) => {
+        const mesh = c as THREE.Mesh
+        const mat = mesh.material as THREE.MeshStandardMaterial | undefined
+        if (mat && mat.emissive) mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
       })
     }
+    this.emitSelection(obj ?? null)
   }
 
   private polygonArea(pts: { x: number; z: number }[]): number {
@@ -1013,25 +1210,78 @@ export class Engine {
     return s / 2
   }
 
+  /** стена как набор боксов: простенки + перемычки + подоконные части */
+  private buildWallMesh(w: WallData): THREE.Group {
+    const group = new THREE.Group()
+    const dir = new THREE.Vector3().subVectors(w.b, w.a)
+    const L = Math.max(0.01, dir.length())
+    const angle = -Math.atan2(dir.z, dir.x)
+    const mid0 = new THREE.Vector3((w.a.x + w.b.x) / 2, 0, (w.a.z + w.b.z) / 2)
+
+    const addBox = (start: number, len: number, y0: number, h: number) => {
+      if (len < 0.005 || h < 0.005) return
+      const geo = new THREE.BoxGeometry(len, h, w.thickness)
+      const mat = new THREE.MeshStandardMaterial({
+        color: w.color,
+        roughness: 0.85,
+        metalness: 0.02,
+      })
+      const mesh = new THREE.Mesh(geo, mat)
+      // локально вдоль X, потом поворот
+      const cx = start + len / 2 - L / 2
+      mesh.position.set(cx, y0 + h / 2, 0)
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      mesh.userData.id = w.id
+      mesh.userData.kind = 'wall'
+      group.add(mesh)
+    }
+
+    const ops = [...w.openings].sort((a, b) => a.offset - b.offset)
+    let cursor = 0
+    for (const op of ops) {
+      const start = Math.max(0, op.offset - op.width / 2)
+      const end = Math.min(L, op.offset + op.width / 2)
+      if (start > cursor + 0.005) {
+        addBox(cursor, start - cursor, 0, w.height)
+      }
+      const top = Math.min(op.sill + op.height, w.height)
+      const lintelH = w.height - top
+      if (lintelH > 0.01) {
+        addBox(start, end - start, top, lintelH)
+      }
+      if (op.sill > 0.01) {
+        addBox(start, end - start, 0, op.sill)
+      }
+      cursor = Math.max(cursor, end)
+    }
+    if (cursor < L - 0.005) {
+      addBox(cursor, L - cursor, 0, w.height)
+    }
+    // совсем пустая стена (нет проёмов покрыть целиком)
+    if (ops.length === 0) {
+      addBox(0, L, 0, w.height)
+    }
+
+    group.position.copy(mid0)
+    group.rotation.y = angle
+    group.userData.id = w.id
+    group.userData.kind = 'wall'
+    return group
+  }
+
   private rebuild(id: string) {
     const obj = this.objects.find((o) => o.id === id)
     if (!obj) return
-    const old = this.idToMesh.get(id)
+    const old = this.idToObj.get(id)
     if (old) {
       this.scene.remove(old)
       this.disposeObj(old)
-      this.idToMesh.delete(id)
+      this.idToObj.delete(id)
     }
-    let mesh: THREE.Mesh
+    let root: THREE.Object3D
     if (obj.kind === 'wall') {
-      const dir = new THREE.Vector3().subVectors(obj.b, obj.a)
-      const len = Math.max(0.01, dir.length())
-      mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(len, obj.height, obj.thickness),
-        new THREE.MeshStandardMaterial({ color: obj.color, roughness: 0.85, metalness: 0.02 }),
-      )
-      mesh.position.set((obj.a.x + obj.b.x) / 2, obj.height / 2, (obj.a.z + obj.b.z) / 2)
-      mesh.rotation.y = -Math.atan2(dir.z, dir.x)
+      root = this.buildWallMesh(obj)
     } else {
       const shape = new THREE.Shape(obj.points.map((p) => new THREE.Vector2(p.x, -p.z)))
       const geo = new THREE.ExtrudeGeometry(shape, {
@@ -1039,7 +1289,7 @@ export class Engine {
         bevelEnabled: false,
       })
       geo.rotateX(-Math.PI / 2)
-      mesh = new THREE.Mesh(
+      const mesh = new THREE.Mesh(
         geo,
         new THREE.MeshStandardMaterial({
           color: obj.color,
@@ -1047,25 +1297,32 @@ export class Engine {
           side: THREE.DoubleSide,
         }),
       )
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      mesh.userData.id = obj.id
+      mesh.userData.kind = 'solid'
+      root = mesh
     }
-    mesh.castShadow = true
-    mesh.receiveShadow = true
-    mesh.userData.id = obj.id
-    mesh.userData.kind = obj.kind
-    this.scene.add(mesh)
-    this.idToMesh.set(obj.id, mesh)
+    root.userData.id = obj.id
+    this.scene.add(root)
+    this.idToObj.set(obj.id, root)
     if (this.selectedId === id) {
-      const mat = mesh.material as THREE.MeshStandardMaterial
-      if (mat.emissive) mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
+      root.traverse((c) => {
+        const mesh = c as THREE.Mesh
+        const mat = mesh.material as THREE.MeshStandardMaterial | undefined
+        if (mat && mat.emissive) mat.emissive.setHex(0x1a73e8).multiplyScalar(0.22)
+      })
     }
   }
 
   private disposeObj(m: THREE.Object3D) {
-    const mesh = m as THREE.Mesh
-    mesh.geometry?.dispose()
-    const mat = mesh.material as THREE.Material | THREE.Material[]
-    if (Array.isArray(mat)) mat.forEach((x) => x.dispose())
-    else mat?.dispose()
+    m.traverse((c) => {
+      const mesh = c as THREE.Mesh
+      mesh.geometry?.dispose()
+      const mat = mesh.material as THREE.Material | THREE.Material[]
+      if (Array.isArray(mat)) mat.forEach((x) => x.dispose())
+      else mat?.dispose()
+    })
   }
 
   private loop = () => {
