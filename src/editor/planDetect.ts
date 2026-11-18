@@ -199,9 +199,26 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
     colCount[x] = c
   }
 
+  // морфологическое замыкание: окна в стене не разрывают полосу
+  const rad = Math.max(4, minThick)
+  const closeCount = (src: Int32Array, len: number) => {
+    const out = new Int32Array(len)
+    for (let i = 0; i < len; i++) {
+      let m = 0
+      for (let k = -rad; k <= rad; k++) {
+        const j = i + k
+        if (j >= 0 && j < len && src[j] > m) m = src[j]
+      }
+      out[i] = m
+    }
+    return out
+  }
+  const rowClosed = closeCount(rowCount, h)
+  const colClosed = closeCount(colCount, w)
+
   const tryFrac = (frac: number) => {
-    const hBands = findBands(rowCount, Math.round(w * frac), minThick, maxThick)
-    const vBands = findBands(colCount, Math.round(h * frac), minThick, maxThick)
+    const hBands = findBands(rowClosed, Math.round(w * frac), minThick, maxThick)
+    const vBands = findBands(colClosed, Math.round(h * frac), minThick, maxThick)
     return { hBands, vBands }
   }
 
@@ -214,6 +231,17 @@ export function detectPlanWalls(source: HTMLCanvasElement): DetectResult {
       vBands = second.vBands
     }
   }
+  // рамки листа не стены
+  const edgeH = h * 0.035
+  const edgeV = w * 0.035
+  hBands = hBands.filter((b) => {
+    const c = (b.start + b.end) / 2
+    return c > edgeH && c < h - edgeH
+  })
+  vBands = vBands.filter((b) => {
+    const c = (b.start + b.end) / 2
+    return c > edgeV && c < w - edgeV
+  })
 
   if (hBands.length < 2 || vBands.length < 2) {
     return {
