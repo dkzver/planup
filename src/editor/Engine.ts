@@ -491,51 +491,6 @@ export class Engine {
     }
   }
 
-  loadExampleRoom() {
-    this.historyPush()
-    this.clearDocQuiet()
-    const floor: SolidData = {
-      kind: 'solid',
-      id: uid(),
-      points: [
-        { x: -2.1, z: -2.4 },
-        { x: 2.1, z: -2.4 },
-        { x: 2.1, z: 2.4 },
-        { x: -2.1, z: 2.4 },
-      ],
-      height: 0.1,
-      color: '#c8b89a',
-    }
-    this.objects.push(floor)
-    this.rebuild(floor.id)
-
-    const mk = (x1: number, z1: number, x2: number, z2: number, ops: OpeningData[] = []): WallData => ({
-      kind: 'wall',
-      id: uid(),
-      a: new THREE.Vector3(x1, 0, z1),
-      b: new THREE.Vector3(x2, 0, z2),
-      height: 2.7,
-      thickness: 0.1,
-      color: '#e8e4d9',
-      openings: ops,
-    })
-    const door: OpeningData = { id: uid(), type: 'door', offset: 0.9, width: 0.9, height: 2.1, sill: 0 }
-    const win: OpeningData = { id: uid(), type: 'window', offset: 1.5, width: 1.2, height: 1.2, sill: 0.9 }
-    const walls = [
-      mk(-2.1, -2.4, 2.1, -2.4, [win]),
-      mk(2.1, -2.4, 2.1, 2.4),
-      mk(2.1, 2.4, 0.3, 2.4, [door]),
-      mk(-0.6, 2.4, -2.1, 2.4),
-      mk(-2.1, 2.4, -2.1, -2.4),
-    ]
-    for (const w of walls) {
-      this.objects.push(w)
-      this.rebuild(w.id)
-    }
-    this.emitCount()
-    this.frameAll()
-  }
-
   private underlay: THREE.Mesh | null = null
   private labels: THREE.Sprite[] = []
 

@@ -169,11 +169,6 @@ export default function EditorPage() {
     }
   }
 
-  const example = () => {
-    engineRef.current?.loadExampleRoom()
-    flash('Пример комнаты с дверью и окном')
-  }
-
   const onVcbKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       engineRef.current?.applyVcb((e.target as HTMLInputElement).value)
@@ -243,9 +238,6 @@ export default function EditorPage() {
             style={axes ? { borderColor: '#1a73e8', color: '#1a73e8' } : undefined}
           >
             # 30
-          </button>
-          <button className="ib" onClick={example} title="Пример комнаты 4×5">
-            🏠
           </button>
           <button className="ib" onClick={() => engineRef.current?.frameAll()} title="Вписать в экран">
             ⤢
