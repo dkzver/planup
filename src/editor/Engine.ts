@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { buildFurnMesh, furnDef, type FurnData } from './furniture'
 
 export type ToolId =
   | 'select'
@@ -10,6 +11,7 @@ export type ToolId =
   | 'move'
   | 'erase'
   | 'orbit'
+  | 'furn'
 
 export interface OpeningData {
   id: string
@@ -23,7 +25,7 @@ export interface OpeningData {
 }
 
 export interface SelInfo {
-  kind: 'wall' | 'solid' | 'opening' | null
+  kind: 'wall' | 'solid' | 'opening' | 'furn' | null
   id?: string
   length?: number
   height?: number
@@ -31,6 +33,10 @@ export interface SelInfo {
   area?: number
   openings?: OpeningData[]
   selectedOpeningId?: string | null
+  furnType?: string
+  furnName?: string
+  furnW?: number
+  furnD?: number
 }
 
 export interface EditorCallbacks {
@@ -62,7 +68,7 @@ export interface SolidData {
   color: string
 }
 
-export type DocObj = WallData | SolidData
+export type DocObj = WallData | SolidData | FurnData
 
 const GRID_FINE = 0.1
 const GRID_AXES = 0.3
@@ -92,6 +98,7 @@ const HINTS: Record<ToolId, string> = {
   move: 'Тяните выбранный объект по полу.',
   erase: 'Кликните объект, чтобы удалить.',
   orbit: 'Левая кнопка — орбита. Колесо — зум. Правая — панорама.',
+  furn: 'Выберите мебель в каталоге справа и кликните по полу. R — повернуть выбранную.',
 }
 
 export class Engine {
@@ -113,6 +120,7 @@ export class Engine {
   wallThickness = DEFAULT_WALL_T
   wallColor = '#e8e4d9'
   axesVisible = true
+  furnType = 'bed-double'
 
   private objects: DocObj[] = []
   private idToObj = new Map<string, THREE.Object3D>()
@@ -266,7 +274,7 @@ export class Engine {
   setWallHeight(v: number) {
     this.wallHeight = Math.max(0.1, round01(v))
     const sel = this.getSelected()
-    if (sel) {
+    if (sel && sel.kind !== 'furn') {
       sel.height = this.wallHeight
       if (sel.kind === 'wall') this.clampOpenings(sel)
       this.rebuild(sel.id)
@@ -289,7 +297,7 @@ export class Engine {
   setWallColor(c: string) {
     this.wallColor = c
     const sel = this.getSelected()
-    if (sel) {
+    if (sel && sel.kind !== 'furn') {
       sel.color = c
       this.rebuild(sel.id)
       this.historyPush()
@@ -299,6 +307,20 @@ export class Engine {
   getSelected(): DocObj | null {
     if (!this.selectedId) return null
     return this.objects.find((o) => o.id === this.selectedId) ?? null
+  }
+
+  setFurnType(type: string) {
+    this.furnType = type
+    this.setTool('furn')
+  }
+
+  rotateSelectedFurn() {
+    const sel = this.getSelected()
+    if (!sel || sel.kind !== 'furn') return
+    this.historyPush()
+    sel.rot = (sel.rot + Math.PI / 2) % (Math.PI * 2)
+    this.rebuild(sel.id)
+    this.emitSelection(sel)
   }
 
   deleteSelected() {
@@ -482,7 +504,7 @@ export class Engine {
       return
     }
     const sel = this.getSelected()
-    if (sel) {
+    if (sel && sel.kind !== 'furn') {
       sel.height = round01(n)
       if (sel.kind === 'wall') this.clampOpenings(sel)
       this.rebuild(sel.id)
@@ -713,6 +735,51 @@ export class Engine {
     this.addLabel('Прихожая', 8.2, 7.6)
     this.addLabel('Вход ↓', 7.4, 9.2)
 
+    // Основная мебель
+    const put = (type: string, x: number, z: number, rotDeg = 0) => {
+      const f: FurnData = {
+        kind: 'furn',
+        id: uid(),
+        type,
+        x: round01(x),
+        z: round01(z),
+        rot: (rotDeg * Math.PI) / 180,
+      }
+      this.objects.push(f)
+      this.rebuild(f.id)
+    }
+
+    // Кухня-гостиная
+    put('kitchen', 1.7, 0.55, 0)
+    put('fridge', 3.3, 0.55, 0)
+    put('sofa', 2.4, 6.8, 0)
+    put('table-coffee', 2.4, 5.4, 0)
+    put('table-dine', 5.6, 3.2, 0)
+    put('chair', 5.0, 2.5, 0)
+    put('chair', 6.2, 2.5, 0)
+    put('chair', 5.0, 3.9, 180)
+    put('chair', 6.2, 3.9, 180)
+    put('tv-stand', 5.8, 0.55, 0)
+
+    // Спальня
+    put('bed-double', 9.9, 1.4, 0)
+    put('nightstand', 8.9, 0.55, 0)
+    put('nightstand', 10.9, 0.55, 0)
+    put('wardrobe', 9.9, 5.55, 180)
+
+    // Ванная
+    put('bath', 10.7, 7.4, 90)
+    put('sink', 9.7, 6.7, 0)
+    put('toilet', 9.6, 7.9, 180)
+
+    // Санузел
+    put('toilet', 6.3, 5.5, 180)
+    put('sink', 6.3, 6.1, 0)
+
+    // Прихожая
+    put('wardrobe-hall', 8.4, 8.25, 0)
+    put('shoe', 7.5, 7.0, 90)
+
     this.emitCount()
     this.historyPush()
     this.frameAll()
@@ -735,7 +802,9 @@ export class Engine {
                 b: o.b.toArray(),
                 openings: o.openings.map((op) => ({ ...op })),
               }
-            : { ...o, points: o.points.map((p) => ({ ...p })) },
+            : o.kind === 'furn'
+              ? { ...o }
+              : { ...o, points: o.points.map((p) => ({ ...p })) },
         ),
       },
       null,
@@ -773,6 +842,17 @@ export class Engine {
           }
           this.objects.push(s)
           this.rebuild(s.id)
+        } else if (raw.kind === 'furn' && raw.type) {
+          const f: FurnData = {
+            kind: 'furn',
+            id: raw.id ?? uid(),
+            type: raw.type,
+            x: raw.x ?? 0,
+            z: raw.z ?? 0,
+            rot: raw.rot ?? 0,
+          }
+          this.objects.push(f)
+          this.rebuild(f.id)
         }
       }
       if (typeof data.wallHeight === 'number') this.wallHeight = round01(data.wallHeight)
@@ -844,7 +924,9 @@ export class Engine {
     return this.objects.map((o) =>
       o.kind === 'wall'
         ? { ...o, a: o.a.clone(), b: o.b.clone(), openings: o.openings.map((op) => ({ ...op })) }
-        : { ...o, points: o.points.map((p) => ({ ...p })) },
+        : o.kind === 'solid'
+          ? { ...o, points: o.points.map((p) => ({ ...p })) }
+          : { ...o },
     )
   }
 
@@ -891,6 +973,17 @@ export class Engine {
         thickness: obj.thickness,
         openings: obj.openings.map((o) => ({ ...o })),
         selectedOpeningId: this.selectedOpeningId,
+      })
+    } else if (obj.kind === 'furn') {
+      const def = furnDef(obj.type)
+      this.cb.onSelection?.({
+        kind: 'furn',
+        id: obj.id,
+        height: def.h,
+        furnType: obj.type,
+        furnName: def.name,
+        furnW: def.w,
+        furnD: def.d,
       })
     } else {
       this.cb.onSelection?.({
@@ -972,6 +1065,11 @@ export class Engine {
         this.setAxesVisible(!this.axesVisible)
         return
       }
+      // R — повернуть мебель, если выбрана
+      if (e.key.toLowerCase() === 'r' && this.getSelected()?.kind === 'furn') {
+        this.rotateSelectedFurn()
+        return
+      }
       const map: Record<string, ToolId> = {
         s: 'select', л: 'select',
         l: 'line', д: 'line',
@@ -981,6 +1079,7 @@ export class Engine {
         m: 'move', ь: 'move',
         e: 'erase', у: 'erase',
         o: 'orbit', щ: 'orbit',
+        f: 'furn', а: 'furn',
       }
       const t = map[e.key.toLowerCase()]
       if (t) this.setTool(t)
@@ -1037,7 +1136,12 @@ export class Engine {
     let best: THREE.Vector3 | null = null
     let bestD = VERTEX_SNAP
     for (const o of this.objects) {
-      const vs = o.kind === 'wall' ? [o.a, o.b] : o.points.map((q) => new THREE.Vector3(q.x, 0, q.z))
+      const vs =
+        o.kind === 'wall'
+          ? [o.a, o.b]
+          : o.kind === 'solid'
+            ? o.points.map((q) => new THREE.Vector3(q.x, 0, q.z))
+            : []
       for (const v of vs) {
         const d = Math.hypot(v.x - p.x, v.z - p.z)
         if (d < bestD) {
@@ -1063,6 +1167,28 @@ export class Engine {
     const t = this.tool
     if (t === 'orbit') return
 
+    if (t === 'furn') {
+      const raw = this.pickGround()
+      if (!raw) return
+      const p = raw.clone()
+      p.x = this.quantPlan(p.x)
+      p.z = this.quantPlan(p.z)
+      this.historyPush()
+      const f: FurnData = {
+        kind: 'furn',
+        id: uid(),
+        type: this.furnType,
+        x: p.x,
+        z: p.z,
+        rot: 0,
+      }
+      this.objects.push(f)
+      this.rebuild(f.id)
+      this.select(f.id)
+      this.emitCount()
+      return
+    }
+
     if (t === 'select' || t === 'erase') {
       const obj = this.pickObject()
       if (!obj) {
@@ -1078,8 +1204,8 @@ export class Engine {
         return
       }
       this.select(id, opId)
-      // сразу можно тянуть проём инструментом «Выбор»
-      if (opId) this.moveLast = this.pickGround()
+      // сразу можно тянуть проём или мебель инструментом «Выбор»
+      if (opId || obj.userData.kind === 'furn') this.moveLast = this.pickGround()
       return
     }
 
@@ -1146,7 +1272,7 @@ export class Engine {
       const obj = this.pickObject()
       if (!obj) return
       const doc = this.objects.find((o) => o.id === obj.userData.id)
-      if (!doc) return
+      if (!doc || doc.kind === 'furn') return
       this.select(doc.id)
       this.pushObj = doc
       this.pushH = doc.height
@@ -1185,6 +1311,15 @@ export class Engine {
       if (!raw) return
       const obj = this.getSelected()
       if (!obj) return
+
+      // перетаскивание мебели, шаг 10 см
+      if (obj.kind === 'furn') {
+        obj.x = this.quantPlan(raw.x)
+        obj.z = this.quantPlan(raw.z)
+        this.rebuild(obj.id)
+        this.emitSelection(obj)
+        return
+      }
 
       // перетаскивание проёма вдоль стены, шаг 10 см
       if (this.selectedOpeningId && obj.kind === 'wall') {
@@ -1392,7 +1527,7 @@ export class Engine {
   }
 
   private previewPushPull(h: number) {
-    if (!this.pushObj) return
+    if (!this.pushObj || this.pushObj.kind === 'furn') return
     this.pushObj.height = round01(h)
     if (this.pushObj.kind === 'wall') this.clampOpenings(this.pushObj)
     this.rebuild(this.pushObj.id)
@@ -1545,6 +1680,8 @@ export class Engine {
     let root: THREE.Object3D
     if (obj.kind === 'wall') {
       root = this.buildWallMesh(obj)
+    } else if (obj.kind === 'furn') {
+      root = buildFurnMesh(obj)
     } else {
       const shape = new THREE.Shape(obj.points.map((p) => new THREE.Vector2(p.x, -p.z)))
       const geo = new THREE.ExtrudeGeometry(shape, {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Engine, type ToolId, type SelInfo, type OpeningData } from '../editor/Engine'
+import { FURNITURE } from '../editor/furniture'
 
 const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
   { id: 'select', icon: '⬈', label: 'Выбор', key: 'S' },
@@ -11,6 +12,7 @@ const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
   { id: 'move', icon: '✥', label: 'Переместить', key: 'M' },
   { id: 'erase', icon: '⌫', label: 'Ластик', key: 'E' },
   { id: 'orbit', icon: '◍', label: 'Орбита', key: 'O' },
+  { id: 'furn', icon: '🛏', label: 'Мебель', key: 'F' },
 ]
 
 export default function EditorPage() {
@@ -30,6 +32,7 @@ export default function EditorPage() {
   const [wallT, setWallT] = useState(0.1)
   const [color, setColor] = useState('#e8e4d9')
   const [axes, setAxes] = useState(true)
+  const [furnCat, setFurnCat] = useState('Спальня')
   const [showHelp, setShowHelp] = useState(false)
   const [toast, setToast] = useState('')
   const [initError, setInitError] = useState('')
@@ -323,9 +326,66 @@ export default function EditorPage() {
             </p>
           </div>
 
+          {tool === 'furn' && (
+            <div className="panel">
+              <h4>Каталог мебели</h4>
+              <div className="cats">
+                {['Спальня', 'Гостиная', 'Кухня', 'Санузел', 'Прихожая'].map((c) => (
+                  <button
+                    key={c}
+                    className={'chip' + (furnCat === c ? ' on' : '')}
+                    onClick={() => setFurnCat(c)}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+              <div className="furn-list">
+                {FURNITURE.filter((f) => f.cat === furnCat).map((f) => (
+                  <button
+                    key={f.type}
+                    className={'furn-item' + (engineRef.current?.furnType === f.type ? ' on' : '')}
+                    onClick={() => engineRef.current?.setFurnType(f.type)}
+                  >
+                    <span className="furn-name">{f.name}</span>
+                    <span className="furn-dim">
+                      {f.w.toFixed(2)} × {f.d.toFixed(2)} × {f.h.toFixed(2)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p className="note">Выберите тип и кликните по полу. R — повернуть выбранное.</p>
+            </div>
+          )}
+
           <div className="panel">
             <h4>Выбрано</h4>
             {sel.kind === null && <p className="note">Ничего не выбрано</p>}
+            {sel.kind === 'furn' && (
+              <>
+                <ul className="props">
+                  <li>
+                    <span>Тип</span>
+                    <b>{sel.furnName ?? sel.furnType}</b>
+                  </li>
+                  <li>
+                    <span>Габарит</span>
+                    <b>
+                      {sel.furnW?.toFixed(2)} × {sel.furnD?.toFixed(2)} × {sel.height?.toFixed(2)}
+                    </b>
+                  </li>
+                </ul>
+                <div className="op-btns">
+                  <button className="btn btn-ghost sm" onClick={() => engineRef.current?.rotateSelectedFurn()}>
+                    Повернуть (R)
+                  </button>
+                  <button className="btn btn-danger sm" onClick={() => engineRef.current?.deleteSelected()}>
+                    Удалить
+                  </button>
+                </div>
+                <p className="note">Тяните мышью по полу — шаг 10 см.</p>
+              </>
+            )}
             {sel.kind === 'wall' || sel.kind === 'opening' ? (
               <>
                 <ul className="props">
@@ -506,6 +566,12 @@ export default function EditorPage() {
               </li>
               <li>
                 <b>O</b> орбита
+              </li>
+              <li>
+                <b>F</b> мебель
+              </li>
+              <li>
+                <b>R</b> повернуть мебель
               </li>
               <li>
                 <b>G</b> оси 30 см

@@ -312,6 +312,49 @@ p { line-height: 1.6; }
   border-color: var(--brand);
   background: #f0f6ff;
 }
+.cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.chip {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font: 600 12px inherit;
+  cursor: pointer;
+  color: var(--muted);
+}
+.chip.on {
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+}
+.furn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.furn-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 10px;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.furn-item:hover { border-color: var(--brand); }
+.furn-item.on { border-color: var(--brand); background: #f0f6ff; }
+.furn-name { font: 600 13px inherit; color: var(--ink); }
+.furn-dim { font: 500 11px ui-monospace, monospace; color: var(--muted); }
 .op-row {
   display: flex;
   align-items: center;
