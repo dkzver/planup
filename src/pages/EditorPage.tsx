@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Engine, type ToolId, type SelInfo, type OpeningData, type WorkVolumes } from '../editor/Engine'
-import { FURNITURE } from '../editor/furniture'
+import { FURNITURE, type FurnArrangement } from '../editor/furniture'
 
 const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
   { id: 'select', icon: '⬈', label: 'Выбор', key: 'S' },
@@ -14,6 +14,28 @@ const TOOLS: { id: ToolId; icon: string; label: string; key: string }[] = [
   { id: 'orbit', icon: '◍', label: 'Орбита', key: 'O' },
   { id: 'furn', icon: '🛏', label: 'Мебель', key: 'F' },
 ]
+
+const FURN_ICON: Record<string, string> = {
+  'bed-double': '🛏',
+  'bed-single': '🛌',
+  nightstand: '🗄',
+  wardrobe: '🚪',
+  sofa: '🛋',
+  armchair: '💺',
+  'table-dine': '🍽',
+  'table-coffee': '☕',
+  chair: '🪑',
+  'tv-stand': '📺',
+  kitchen: '🍳',
+  'kitchen-island': '🧑‍🍳',
+  fridge: '🧊',
+  bath: '🛁',
+  shower: '🚿',
+  toilet: '🚽',
+  sink: '🧼',
+  'wardrobe-hall': '🧥',
+  shoe: '👟',
+}
 
 export default function EditorPage() {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -35,6 +57,10 @@ export default function EditorPage() {
   const [furnCat, setFurnCat] = useState('Спальня')
   const [showHelp, setShowHelp] = useState(false)
   const [vol, setVol] = useState<WorkVolumes | null>(null)
+  const [furnOpen, setFurnOpen] = useState(false)
+  const [furnChecked, setFurnChecked] = useState<string[]>([])
+  const [furnHist, setFurnHist] = useState<FurnArrangement[]>([])
+  const [furnTab, setFurnTab] = useState<'pick' | 'hist'>('pick')
   const [toast, setToast] = useState('')
   const [initError, setInitError] = useState('')
 
@@ -122,7 +148,39 @@ export default function EditorPage() {
 
   const buildApartment = () => {
     engineRef.current?.loadApartmentProject()
-    flash('Сцена собрана по обмерному плану')
+    flash('Стены собраны. Кнопка «Расставить мебель» — выбрать предметы.')
+  }
+
+  const openFurn = () => {
+    setFurnHist(engineRef.current?.getFurnHistory() ?? [])
+    setFurnOpen(true)
+  }
+
+  const toggleFurnCheck = (type: string) => {
+    setFurnChecked((prev) => (prev.includes(type) ? prev.filter((t) => t !== type) : [...prev, type]))
+  }
+
+  const applyFurn = () => {
+    engineRef.current?.placeFurnitureSet(furnChecked)
+    setFurnHist(engineRef.current?.getFurnHistory() ?? [])
+    setFurnOpen(false)
+    flash(furnChecked.length ? `Расставлено: ${furnChecked.length} типов` : 'Мебель убрана')
+  }
+
+  const restoreArr = (id: string) => {
+    engineRef.current?.restoreFurnArrangement(id)
+    setFurnOpen(false)
+    flash('Расстановка восстановлена')
+  }
+
+  const starArr = (id: string) => {
+    engineRef.current?.toggleFurnStar(id)
+    setFurnHist(engineRef.current?.getFurnHistory() ?? [])
+  }
+
+  const delArr = (id: string) => {
+    engineRef.current?.deleteFurnArrangement(id)
+    setFurnHist(engineRef.current?.getFurnHistory() ?? [])
   }
 
   const loadPlanFile = async (file: File) => {
@@ -268,6 +326,9 @@ export default function EditorPage() {
           </label>
           <button className="btn btn-primary sm" onClick={buildApartment}>
             Собрать квартиру
+          </button>
+          <button className="btn btn-primary sm" onClick={openFurn}>
+            Расставить мебель
           </button>
           <button
             className="btn btn-ghost sm"
@@ -613,6 +674,105 @@ export default function EditorPage() {
         </div>
         <div className="hint">{hint}</div>
       </footer>
+
+      {furnOpen && (
+        <div className="modal" onClick={() => setFurnOpen(false)}>
+          <div className="modal-card furn-dlg" onClick={(e) => e.stopPropagation()}>
+            <div className="furn-head">
+              <div>
+                <h3>Расстановка мебели</h3>
+                <p className="note">
+                  Отметьте предметы — встанут на типовые места квартиры. Повторное применение — перестановка.
+                </p>
+              </div>
+              <div className="furn-tabs">
+                <button className={'chip' + (furnTab === 'pick' ? ' on' : '')} onClick={() => setFurnTab('pick')}>
+                  Выбор
+                </button>
+                <button className={'chip' + (furnTab === 'hist' ? ' on' : '')} onClick={() => setFurnTab('hist')}>
+                  История {furnHist.length ? `(${furnHist.length})` : ''}
+                </button>
+              </div>
+            </div>
+
+            {furnTab === 'pick' ? (
+              <>
+                <div className="cats">
+                  {['Спальня', 'Гостиная', 'Кухня', 'Санузел', 'Прихожая'].map((c) => (
+                    <button key={c} className="chip" style={{ pointerEvents: 'none', opacity: 0.7 }}>
+                      {c}
+                    </button>
+                  ))}
+                </div>
+                <div className="furn-grid">
+                  {FURNITURE.map((f) => {
+                    const on = furnChecked.includes(f.type)
+                    return (
+                      <button
+                        key={f.type}
+                        className={'furn-card' + (on ? ' on' : '')}
+                        onClick={() => toggleFurnCheck(f.type)}
+                      >
+                        <span className="furn-ico">{FURN_ICON[f.type] ?? '📦'}</span>
+                        <span className="furn-name">{f.name}</span>
+                        <span className="furn-dim">
+                          {f.w.toFixed(2)} × {f.d.toFixed(2)}
+                        </span>
+                        <span className={'furn-check' + (on ? ' on' : '')}>
+                          {on ? '✓' : ''}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className="furn-foot">
+                  <span>Выбрано: {furnChecked.length}</span>
+                  <div className="op-btns">
+                    <button className="btn btn-ghost sm" onClick={() => setFurnChecked([])}>
+                      Снять всё
+                    </button>
+                    <button className="btn btn-primary sm" onClick={applyFurn}>
+                      Применить
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="furn-hist">
+                {furnHist.length === 0 && <p className="note">Пока нет расстановок. Примените выбор на вкладке «Выбор».</p>}
+                {furnHist.map((a) => (
+                  <div key={a.id} className={'hist-card' + (a.starred ? ' star' : '')}>
+                    <button
+                      className={'star-btn' + (a.starred ? ' on' : '')}
+                      title={a.starred ? 'Снять звезду' : 'Отметить звездой'}
+                      onClick={() => starArr(a.id)}
+                    >
+                      {a.starred ? '★' : '☆'}
+                    </button>
+                    <div className="hist-main" onClick={() => restoreArr(a.id)}>
+                      <b>{a.name}</b>
+                      <span className="note">
+                        {new Date(a.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+                        {' · '}
+                        {a.types.length} типов · {a.items.length} предметов
+                      </span>
+                    </div>
+                    <button className="ib sm" title="Восстановить" onClick={() => restoreArr(a.id)}>
+                      ↺
+                    </button>
+                    <button className="ib sm" title="Удалить из истории" onClick={() => delArr(a.id)}>
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                {furnHist.length > 0 && (
+                  <p className="note">Нажмите на строку или ↺, чтобы вернуть расстановку. Звезда — избранное сверху.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {vol && (
         <div className="modal" onClick={() => setVol(null)}>

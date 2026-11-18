@@ -22,6 +22,16 @@ export interface FurnData {
   rot: number
 }
 
+export interface FurnArrangement {
+  id: string
+  seq: number
+  name: string
+  items: FurnData[]
+  starred: boolean
+  at: number
+  types: string[]
+}
+
 export const FURNITURE: FurnitureDef[] = [
   { type: 'bed-double', name: 'Кровать 160×200', w: 1.6, d: 2.0, h: 0.9, color: '#c9b8a8', cat: 'Спальня' },
   { type: 'bed-single', name: 'Кровать 90×200', w: 0.9, d: 2.0, h: 0.9, color: '#c9b8a8', cat: 'Спальня' },

@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { buildFurnMesh, furnDef, type FurnData } from './furniture'
+import { buildFurnMesh, furnDef, type FurnArrangement, type FurnData } from './furniture'
 
 export type ToolId =
   | 'select'
@@ -272,6 +272,7 @@ export class Engine {
     this.ro.observe(container)
     this.setTool('wall')
     this.setAxesVisible(true)
+    this.loadFurnHistory()
     this.loop()
   }
 
@@ -783,59 +784,152 @@ export class Engine {
     this.addLabel('Прихожая', 6.8, 5.75)
     this.addLabel('Вход ↓', 6.8, 7.2)
 
-    // Основная мебель: кухня у западной глухой стены, не под окнами
-    const put = (type: string, x: number, z: number, rotDeg = 0) => {
-      const f: FurnData = {
-        kind: 'furn',
-        id: uid(),
-        type,
-        x: round01(x),
-        z: round01(z),
-        rot: (rotDeg * Math.PI) / 180,
-      }
-      this.objects.push(f)
-      this.rebuild(f.id)
-    }
-
-    // Кухня вдоль запада (глухая стена), фронт на восток
-    put('kitchen', 0.45, 1.9, 90)
-    put('fridge', 0.48, 3.7, 90)
-    // ТВ у запада южнее кухни, диван напротив
-    put('tv-stand', 0.55, 5.3, 90)
-    put('sofa', 3.6, 5.3, 270)
-    put('table-coffee', 2.5, 5.3, 0)
-    // Обеденный стол в восточной части гостиной
-    put('table-dine', 6.1, 2.1, 0)
-    put('chair', 5.5, 1.5, 0)
-    put('chair', 6.7, 1.5, 0)
-    put('chair', 5.5, 2.7, 180)
-    put('chair', 6.7, 2.7, 180)
-
-    // Спальня: изголовье к восточной глухой стене, окно на севере свободно
-    put('bed-double', 10.8, 2.0, 270)
-    put('nightstand', 11.45, 0.85, 0)
-    put('nightstand', 11.45, 3.15, 0)
-    put('wardrobe', 9.1, 4.7, 90)
-
-    // Ванная
-    put('bath', 11.15, 6.6, 90)
-    put('sink', 9.95, 6.15, 180)
-    put('toilet', 9.9, 7.6, 180)
-
-    // Санузел
-    put('toilet', 5.05, 5.4, 180)
-    put('sink', 5.05, 6.1, 0)
-
-    // Прихожая
-    put('shoe', 6.5, 6.25, 180)
-    put('wardrobe-hall', 7.55, 5.7, 90)
-
     this.emitCount()
     this.historyPush()
     this.frameAll()
-    this.cb.onHint?.('Сцена по плану: кухня у западной стены, окна на севере. Мебель можно двигать.')
+    this.cb.onHint?.('Стены собраны. Кнопка «Расставить мебель» — выбрать предметы и применить.')
   }
 
+
+  /** Типовые места мебели в собранной квартире */
+  private static SLOTS: Record<string, { x: number; z: number; rot: number }[]> = {
+    kitchen: [{ x: 0.45, z: 1.9, rot: Math.PI / 2 }],
+    fridge: [{ x: 0.48, z: 3.7, rot: Math.PI / 2 }],
+    'tv-stand': [{ x: 0.55, z: 5.3, rot: Math.PI / 2 }],
+    sofa: [{ x: 3.6, z: 5.3, rot: (3 * Math.PI) / 2 }],
+    armchair: [{ x: 5.8, z: 5.3, rot: Math.PI / 2 }],
+    'table-coffee': [{ x: 2.5, z: 5.3, rot: 0 }],
+    'table-dine': [{ x: 6.1, z: 2.1, rot: 0 }],
+    chair: [
+      { x: 5.5, z: 1.5, rot: 0 },
+      { x: 6.7, z: 1.5, rot: 0 },
+      { x: 5.5, z: 2.7, rot: Math.PI },
+      { x: 6.7, z: 2.7, rot: Math.PI },
+    ],
+    'bed-double': [{ x: 10.8, z: 2.0, rot: (3 * Math.PI) / 2 }],
+    'bed-single': [{ x: 9.4, z: 2.0, rot: (3 * Math.PI) / 2 }],
+    nightstand: [
+      { x: 11.45, z: 0.85, rot: 0 },
+      { x: 11.45, z: 3.15, rot: 0 },
+    ],
+    wardrobe: [{ x: 9.1, z: 4.7, rot: Math.PI / 2 }],
+    bath: [{ x: 11.15, z: 6.6, rot: Math.PI / 2 }],
+    shower: [{ x: 10.6, z: 7.5, rot: 0 }],
+    sink: [{ x: 9.95, z: 6.15, rot: Math.PI }],
+    toilet: [{ x: 9.9, z: 7.6, rot: Math.PI }],
+    'wardrobe-hall': [{ x: 7.55, z: 5.7, rot: Math.PI / 2 }],
+    shoe: [{ x: 6.5, z: 6.25, rot: Math.PI }],
+    'kitchen-island': [{ x: 3.4, z: 1.9, rot: 0 }],
+  }
+
+  private furnHistory: FurnArrangement[] = []
+  private furnSeq = 1
+
+  private removeAllFurn() {
+    const ids = this.objects.filter((o) => o.kind === 'furn').map((o) => o.id)
+    for (const id of ids) {
+      const m = this.idToObj.get(id)
+      if (m) {
+        this.scene.remove(m)
+        this.disposeObj(m)
+        this.idToObj.delete(id)
+      }
+    }
+    this.objects = this.objects.filter((o) => o.kind !== 'furn')
+    if (this.selectedId && ids.includes(this.selectedId)) {
+      this.select(null)
+    }
+  }
+
+  private persistFurnHistory() {
+    try {
+      localStorage.setItem(
+        'planup.furnhist',
+        JSON.stringify(this.furnHistory.slice(0, 20)),
+      )
+    } catch {
+      /* ignore */
+    }
+  }
+
+  loadFurnHistory() {
+    try {
+      const j = localStorage.getItem('planup.furnhist')
+      if (j) this.furnHistory = JSON.parse(j) as FurnArrangement[]
+      this.furnSeq = this.furnHistory.reduce((m, a) => Math.max(m, a.seq), 0) + 1
+    } catch {
+      this.furnHistory = []
+    }
+  }
+
+  getFurnHistory(): FurnArrangement[] {
+    return this.furnHistory.map((a) => ({ ...a, items: a.items.map((i) => ({ ...i })) }))
+  }
+
+  /** Расставить выбранные типы по типовым местам. Повторный вызов — перестановка. */
+  placeFurnitureSet(types: string[]) {
+    this.historyPush()
+    this.removeAllFurn()
+    const uniq = [...new Set(types)]
+    for (const type of uniq) {
+      const slots = Engine.SLOTS[type] ?? [{ x: 4, z: 3, rot: 0 }]
+      for (const s of slots) {
+        const f: FurnData = {
+          kind: 'furn',
+          id: uid(),
+          type,
+          x: round01(s.x),
+          z: round01(s.z),
+          rot: s.rot,
+        }
+        this.objects.push(f)
+        this.rebuild(f.id)
+      }
+    }
+    const arr: FurnArrangement = {
+      id: uid(),
+      seq: this.furnSeq++,
+      name: `Расстановка ${this.furnSeq - 1}`,
+      items: this.objects
+        .filter((o): o is FurnData => o.kind === 'furn')
+        .map((o) => ({ ...o })),
+      starred: false,
+      at: Date.now(),
+      types: uniq,
+    }
+    this.furnHistory.unshift(arr)
+    if (this.furnHistory.length > 20) this.furnHistory.length = 20
+    this.persistFurnHistory()
+    this.emitCount()
+    this.cb.onHint?.(`Расставлено: ${uniq.length} типов. История — в окне расстановки.`)
+  }
+
+  restoreFurnArrangement(id: string) {
+    const a = this.furnHistory.find((x) => x.id === id)
+    if (!a) return
+    this.historyPush()
+    this.removeAllFurn()
+    for (const item of a.items) {
+      const f: FurnData = { ...item }
+      this.objects.push(f)
+      this.rebuild(f.id)
+    }
+    this.emitCount()
+    this.cb.onHint?.(`Восстановлено: ${a.name}`)
+  }
+
+  toggleFurnStar(id: string) {
+    const a = this.furnHistory.find((x) => x.id === id)
+    if (!a) return
+    a.starred = !a.starred
+    this.furnHistory.sort((x, y) => Number(y.starred) - Number(x.starred) || y.seq - x.seq)
+    this.persistFurnHistory()
+  }
+
+  deleteFurnArrangement(id: string) {
+    this.furnHistory = this.furnHistory.filter((x) => x.id !== id)
+    this.persistFurnHistory()
+  }
 
   /** Объёмы основных работ по текущей модели */
   getWorkVolumes(): WorkVolumes {
