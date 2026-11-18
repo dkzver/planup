@@ -111,25 +111,62 @@ export default function EditorPage() {
     flash('Проект сохранён в браузере')
   }
 
-  const doExport = () => {
-    const eng = engineRef.current
-    if (!eng) return
-    const blob = new Blob([eng.serialize()], { type: 'application/json' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = 'planup-project.json'
-    a.click()
-    URL.revokeObjectURL(a.href)
-    flash('JSON скачан')
+  const newProject = () => {
+    engineRef.current?.newProject()
+    flash('Новый проект')
   }
 
-  const doImport = (file: File) => {
-    const r = new FileReader()
-    r.onload = () => {
-      const ok = engineRef.current?.load(String(r.result))
-      flash(ok ? 'Проект загружен' : 'Не удалось прочитать файл')
+  const buildApartment = () => {
+    engineRef.current?.loadApartmentProject()
+    flash('Сцена собрана по обмерному плану')
+  }
+
+  const loadPlanFile = async (file: File) => {
+    try {
+      if (file.type.startsWith('image/')) {
+        const url = URL.createObjectURL(file)
+        engineRef.current?.setUnderlay(url, 14, 10)
+        flash('План загружен как подложка')
+        return
+      }
+      if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+        flash('Рендерю PDF…')
+        const pdfUrl = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.min.mjs'
+        const pdfjs = await import(/* @vite-ignore */ pdfUrl)
+        const lib = (pdfjs as unknown as {
+          GlobalWorkerOptions: { workerSrc: string }
+          getDocument: (o: { data: ArrayBuffer }) => {
+            promise: Promise<{
+              getPage: (n: number) => Promise<{
+                getViewport: (o: { scale: number }) => { width: number; height: number }
+                render: (o: { canvasContext: CanvasRenderingContext2D; viewport: unknown }) => {
+                  promise: Promise<void>
+                }
+              }>
+            }>
+          }
+        })
+        lib.GlobalWorkerOptions.workerSrc =
+          'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.8.69/build/pdf.worker.min.mjs'
+        const buf = await file.arrayBuffer()
+        const doc = await lib.getDocument({ data: buf }).promise
+        const page = await doc.getPage(1)
+        const vp = page.getViewport({ scale: 2 })
+        const canvas = document.createElement('canvas')
+        canvas.width = Math.round(vp.width)
+        canvas.height = Math.round(vp.height)
+        const ctx = canvas.getContext('2d')!
+        await page.render({ canvasContext: ctx, viewport: vp }).promise
+        const url = canvas.toDataURL('image/png')
+        // лист A3 ~ 16.7 × 11.8 м при 71 см/м... план квартиры ~ 12 м шириной
+        engineRef.current?.setUnderlay(url, 16, 11.3)
+        flash('PDF-план загружен подложкой. Кнопка «Собрать квартиру» — готовая сцена.')
+        return
+      }
+      flash('Поддержаны PNG/JPG/PDF')
+    } catch (err) {
+      flash('Не удалось открыть план: ' + (err instanceof Error ? err.message : String(err)))
     }
-    r.readAsText(file)
   }
 
   const example = () => {
@@ -217,25 +254,28 @@ export default function EditorPage() {
             ?
           </button>
           <span className="sep" />
-          <button className="btn btn-ghost sm" onClick={doSave}>
-            Сохранить
-          </button>
-          <button className="btn btn-ghost sm" onClick={doExport}>
-            Экспорт JSON
+          <button className="btn btn-ghost sm" onClick={newProject}>
+            Новый проект
           </button>
           <label className="btn btn-ghost sm file">
-            Импорт
+            Загрузить план
             <input
               type="file"
-              accept=".json"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/*"
               hidden
               onChange={(e) => {
                 const f = e.target.files?.[0]
-                if (f) doImport(f)
+                if (f) void loadPlanFile(f)
                 e.currentTarget.value = ''
               }}
             />
           </label>
+          <button className="btn btn-primary sm" onClick={buildApartment}>
+            Собрать квартиру
+          </button>
+          <button className="btn btn-ghost sm" onClick={doSave}>
+            Сохранить
+          </button>
         </div>
       </header>
 

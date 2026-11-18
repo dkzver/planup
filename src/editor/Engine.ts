@@ -536,6 +536,234 @@ export class Engine {
     this.frameAll()
   }
 
+  private underlay: THREE.Mesh | null = null
+  private labels: THREE.Sprite[] = []
+
+  newProject() {
+    this.clearDoc()
+    if (this.underlay) {
+      this.scene.remove(this.underlay)
+      this.underlay = null
+    }
+    for (const s of this.labels) {
+      this.scene.remove(s)
+      const mat = s.material as THREE.SpriteMaterial
+      mat.map?.dispose()
+      mat.dispose()
+    }
+    this.labels = []
+    this.cb.onHint?.('Новый проект. Нарисуйте стены или соберите сцену из плана.')
+  }
+
+  setUnderlay(url: string, widthM = 14, heightM = 10) {
+    const loader = new THREE.TextureLoader()
+    loader.load(url, (tex) => {
+      tex.colorSpace = THREE.SRGBColorSpace
+      if (this.underlay) this.scene.remove(this.underlay)
+      const geo = new THREE.PlaneGeometry(widthM, heightM)
+      geo.rotateX(-Math.PI / 2)
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.72 })
+      this.underlay = new THREE.Mesh(geo, mat)
+      this.underlay.position.set(widthM / 2 - 1, 0.006, heightM / 2 - 1)
+      this.underlay.renderOrder = -1
+      this.scene.add(this.underlay)
+    })
+  }
+
+  private addLabel(text: string, x: number, z: number) {
+    const canvas = document.createElement('canvas')
+    canvas.width = 320
+    canvas.height = 72
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = 'rgba(255,255,255,0.88)'
+    ctx.beginPath()
+    ctx.roundRect(4, 4, 312, 64, 12)
+    ctx.fill()
+    ctx.fillStyle = '#1c1e21'
+    ctx.font = 'bold 26px Inter, Segoe UI, sans-serif'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, 160, 36)
+    const tex = new THREE.CanvasTexture(canvas)
+    tex.colorSpace = THREE.SRGBColorSpace
+    const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }))
+    spr.scale.set(1.7, 0.38, 1)
+    spr.position.set(x, 1.45, z)
+    spr.renderOrder = 10
+    this.scene.add(spr)
+    this.labels.push(spr)
+  }
+
+  private addWallAx(
+    ax: number,
+    az: number,
+    bx: number,
+    bz: number,
+    t: number,
+    ops: OpeningData[] = [],
+    color = '#e8e4d9',
+  ) {
+    const w: WallData = {
+      kind: 'wall',
+      id: uid(),
+      a: new THREE.Vector3(ax, 0, az),
+      b: new THREE.Vector3(bx, 0, bz),
+      height: 2.7,
+      thickness: t,
+      color,
+      openings: ops,
+    }
+    if (ops.length) this.clampOpenings(w)
+    this.objects.push(w)
+    this.rebuild(w.id)
+    return w
+  }
+
+  private addFloorRoom(points: { x: number; z: number }[], color: string) {
+    const s: SolidData = {
+      kind: 'solid',
+      id: uid(),
+      points,
+      height: 0.04,
+      color,
+    }
+    this.objects.push(s)
+    this.rebuild(s.id)
+  }
+
+  /** Квартира по обмерному плану projectfortest */
+  loadApartmentProject() {
+    this.clearDoc()
+    if (this.underlay) {
+      this.scene.remove(this.underlay)
+      this.underlay = null
+    }
+    for (const s of this.labels) {
+      this.scene.remove(s)
+    }
+    this.labels = []
+
+    const EXT = 0.2
+    const INT = 0.1
+    const door = (offset: number, w = 0.85, h = 2.1): OpeningData => ({
+      id: uid(),
+      type: 'door',
+      offset,
+      width: w,
+      height: h,
+      sill: 0,
+    })
+    const win = (offset: number, w = 1.4, h = 1.4, sill = 0.9): OpeningData => ({
+      id: uid(),
+      type: 'window',
+      offset,
+      width: w,
+      height: h,
+      sill,
+    })
+
+    // Балкон 5.9 × 1.6
+    this.addWallAx(1.2, -1.6, 7.1, -1.6, INT)
+    this.addWallAx(1.2, -1.6, 1.2, 0, INT)
+    this.addWallAx(7.1, -1.6, 7.1, 0, INT)
+
+    // Север квартиры: два выхода на балкон + окно спальни
+    this.addWallAx(0, 0, 11.8, 0, EXT, [
+      win(2.7, 1.5, 2.25, 0.05),
+      win(4.9, 1.5, 2.25, 0.05),
+      win(9.6, 1.6, 1.5, 0.9),
+    ])
+    // Запад
+    this.addWallAx(0, 0, 0, 8.6, EXT)
+    // Восток
+    this.addWallAx(11.8, 0, 11.8, 8.6, EXT)
+    // Юг + вход
+    this.addWallAx(0, 8.6, 11.8, 8.6, EXT, [door(7.4, 0.95, 2.1)])
+
+    // Гостиная / спальня перегородка
+    this.addWallAx(8.0, 0, 8.0, 6.2, INT, [door(5.3, 0.85, 2.1)])
+    // Юг спальни (дверь из коридора)
+    this.addWallAx(8.0, 6.2, 11.8, 6.2, INT, [door(0.9, 0.85, 2.1)])
+    // Запад ванной
+    this.addWallAx(9.2, 6.2, 9.2, 8.6, INT, [door(1.2, 0.75, 2.05)])
+    // Санузел: коробка в гостиной у входа
+    this.addWallAx(5.6, 5.0, 7.0, 5.0, INT, [door(0.7, 0.7, 2.0)])
+    this.addWallAx(5.6, 5.0, 5.6, 6.5, INT)
+    this.addWallAx(7.0, 5.0, 7.0, 6.5, INT)
+    this.addWallAx(5.6, 6.5, 7.0, 6.5, INT)
+
+    // Полы
+    this.addFloorRoom(
+      [
+        { x: 0.2, z: 0.2 },
+        { x: 7.9, z: 0.2 },
+        { x: 7.9, z: 8.4 },
+        { x: 0.2, z: 8.4 },
+      ],
+      '#ead9bd',
+    )
+    this.addFloorRoom(
+      [
+        { x: 8.2, z: 0.2 },
+        { x: 11.6, z: 0.2 },
+        { x: 11.6, z: 6.0 },
+        { x: 8.2, z: 6.0 },
+      ],
+      '#cfe0c8',
+    )
+    this.addFloorRoom(
+      [
+        { x: 9.35, z: 6.4 },
+        { x: 11.6, z: 6.4 },
+        { x: 11.6, z: 8.4 },
+        { x: 9.35, z: 8.4 },
+      ],
+      '#bcd8ea',
+    )
+    this.addFloorRoom(
+      [
+        { x: 5.75, z: 5.15 },
+        { x: 6.9, z: 5.15 },
+        { x: 6.9, z: 6.35 },
+        { x: 5.75, z: 6.35 },
+      ],
+      '#c8d8e8',
+    )
+    this.addFloorRoom(
+      [
+        { x: 1.3, z: -1.5 },
+        { x: 7.0, z: -1.5 },
+        { x: 7.0, z: -0.1 },
+        { x: 1.3, z: -0.1 },
+      ],
+      '#d0d8e0',
+    )
+    this.addFloorRoom(
+      [
+        { x: 8.1, z: 6.4 },
+        { x: 9.2, z: 6.4 },
+        { x: 9.2, z: 8.4 },
+        { x: 7.3, z: 8.4 },
+        { x: 7.3, z: 6.7 },
+        { x: 8.1, z: 6.7 },
+      ],
+      '#ddd8d0',
+    )
+
+    this.addLabel('Кухня-гостиная', 4.0, 3.6)
+    this.addLabel('Спальня №2', 9.9, 3.0)
+    this.addLabel('Ванная', 10.4, 7.4)
+    this.addLabel('Санузел', 6.3, 5.75)
+    this.addLabel('Балкон', 4.15, -0.8)
+    this.addLabel('Прихожая', 8.2, 7.6)
+    this.addLabel('Вход ↓', 7.4, 9.2)
+
+    this.emitCount()
+    this.historyPush()
+    this.frameAll()
+    this.cb.onHint?.('Сцена собрана по обмерному плану. Проёмы можно тянуть.')
+  }
+
   serialize(): string {
     return JSON.stringify(
       {
